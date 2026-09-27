@@ -10,20 +10,22 @@ describe("Customer Portal Layout Specification (Prompt 05)", () => {
     { title: "Payments", href: "/customer/payments" },
     { title: "Notifications", href: "/customer/notifications" },
     { title: "Profile", href: "/customer/profile" },
+    { title: "Logout", action: "logout" },
   ];
 
-  it("verifies all required Customer navigation links exist in order", () => {
-    expect(customerNavigation).toHaveLength(6);
+  it("verifies all 7 required Customer navigation links exist in order", () => {
+    expect(customerNavigation).toHaveLength(7);
     expect(customerNavigation[0].title).toBe("Dashboard");
     expect(customerNavigation[1].title).toBe("My Policies");
     expect(customerNavigation[2].title).toBe("My Claims");
     expect(customerNavigation[3].title).toBe("Payments");
     expect(customerNavigation[4].title).toBe("Notifications");
     expect(customerNavigation[5].title).toBe("Profile");
+    expect(customerNavigation[6].title).toBe("Logout");
   });
 
   it("verifies route scope /customer/* allows only CUSTOMER role", () => {
-    customerNavigation.forEach((item) => {
+    customerNavigation.filter((item) => item.href).forEach((item) => {
       // Allowed for customer
       const customerAccess = canAccessRoute(item.href, UserRole.CUSTOMER);
       expect(customerAccess.allowed).toBe(true);

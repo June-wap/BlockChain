@@ -227,6 +227,18 @@ export function CustomerPortalLayout({
                 </Link>
               );
             })}
+
+            {/* Logout Navigation Item */}
+            <button
+              type="button"
+              onClick={logout}
+              className="w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-semibold text-danger-600 hover:bg-danger-50 hover:text-danger-700 transition-all group select-none mt-1"
+            >
+              <div className="flex items-center gap-3">
+                <LogOut className="w-4 h-4 text-danger-500 group-hover:text-danger-700 transition-colors" />
+                <span>Logout</span>
+              </div>
+            </button>
           </nav>
 
           {/* Customer Profile & Logout Footer */}
@@ -435,6 +447,21 @@ export function CustomerPortalLayout({
                     </Link>
                   );
                 })}
+
+                {/* Mobile Logout Navigation Item */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMobileDrawerOpen(false);
+                    logout();
+                  }}
+                  className="w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-semibold text-danger-600 hover:bg-danger-50 transition-all mt-1"
+                >
+                  <div className="flex items-center gap-3">
+                    <LogOut className="w-4 h-4 text-danger-500" />
+                    <span>Logout</span>
+                  </div>
+                </button>
               </div>
 
               {/* Drawer Footer: Logout */}
