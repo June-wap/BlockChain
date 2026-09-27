@@ -12,6 +12,14 @@ import {
 } from "@/types";
 import { db } from "../db/store";
 import { BlockchainService } from "./blockchain.service";
+import { SecurityUtils } from "../core/security";
+import { ClaimLifecycleEngine } from "../core/lifecycle";
+import {
+  ValidationError,
+  ForbiddenError,
+  NotFoundError,
+  BusinessRuleError,
+} from "../core/errors";
 
 export interface CreateClaimInput {
   policyId: string;
@@ -53,17 +61,19 @@ export class ClaimService {
     // 2. Policy Validation
     const policy = db.getPolicies().get(input.policyId);
     if (!policy) {
-      throw new Error("Specified policy does not exist.");
+      throw new NotFoundError("Insurance Policy", input.policyId);
     }
 
     // Customer ownership validation
     if (policy.customerId !== customerId) {
-      throw new Error("Forbidden: You do not own this insurance policy.");
+      throw new ForbiddenError("Forbidden: You do not own this insurance policy.");
     }
 
     // Policy status validation: Must be ACTIVE
     if (policy.status !== PolicyStatus.ACTIVE) {
-      throw new Error(`Cannot submit claim: Policy is currently ${policy.status}. Only ACTIVE policies are eligible.`);
+      throw new BusinessRuleError(
+        `Cannot submit claim: Policy is currently ${policy.status}. Only ACTIVE policies are eligible.`
+      );
     }
 
     // 3. Incident Date Validation
@@ -72,36 +82,38 @@ export class ClaimService {
     today.setHours(23, 59, 59, 999);
 
     if (isNaN(incDate.getTime())) {
-      throw new Error("Invalid incident date provided.");
+      throw new ValidationError("Invalid incident date provided.");
     }
 
     if (incDate > today) {
-      throw new Error("Incident date cannot be in the future.");
+      throw new ValidationError("Incident date cannot be in the future.");
     }
 
     const polStartDate = new Date(policy.startDate);
     const polEndDate = new Date(policy.endDate);
     if (incDate < polStartDate || incDate > polEndDate) {
-      throw new Error(`Incident date must fall within policy coverage period (${policy.startDate} to ${policy.endDate}).`);
+      throw new BusinessRuleError(
+        `Incident date must fall within policy coverage period (${policy.startDate} to ${policy.endDate}).`
+      );
     }
 
     // 4. Requested Amount Validation
     if (typeof input.requestedAmount !== "number" || input.requestedAmount <= 0) {
-      throw new Error("Requested amount must be greater than 0.");
+      throw new ValidationError("Requested amount must be greater than 0.");
     }
 
     if (input.requestedAmount > policy.coverageAmount) {
-      throw new Error(
+      throw new BusinessRuleError(
         `Requested amount ($${input.requestedAmount.toLocaleString()}) exceeds the maximum policy coverage limit ($${policy.coverageAmount.toLocaleString()}).`
       );
     }
 
     // 5. Description Validation
     if (!input.description || input.description.trim().length < 15) {
-      throw new Error("Description must contain at least 15 characters detailing the incident.");
+      throw new ValidationError("Description must contain at least 15 characters detailing the incident.");
     }
 
-    // 6. Evidence Validation
+    // 6. Evidence Validation & Sanitization (BE-07)
     const allowedMimeTypes = [
       "application/pdf",
       "image/jpeg",
@@ -110,22 +122,30 @@ export class ClaimService {
     ];
     const maxFileSize = 10 * 1024 * 1024; // 10MB limit
 
+    if (input.evidenceFiles && input.evidenceFiles.length > 5) {
+      throw new ValidationError("Maximum 5 evidence documents are permitted per claim.");
+    }
+
     const evidenceItems: EvidenceItem[] = [];
     if (input.evidenceFiles && input.evidenceFiles.length > 0) {
       for (const file of input.evidenceFiles) {
         if (!allowedMimeTypes.includes(file.mimeType)) {
-          throw new Error(`Invalid file type (${file.mimeType}). Only PDF and JPG/PNG/WEBP images are permitted.`);
+          throw new ValidationError(
+            `Invalid file type (${file.mimeType}). Only PDF and JPG/PNG/WEBP images are permitted.`
+          );
         }
         if (file.fileSize > maxFileSize) {
-          throw new Error(`File ${file.fileName} exceeds the 10MB file size limit.`);
+          throw new ValidationError(`File ${file.fileName} exceeds the 10MB file size limit.`);
         }
+
+        const sanitizedFileName = SecurityUtils.sanitizeFilename(file.fileName);
 
         const evItem: EvidenceItem = {
           id: `ev-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-          claimId: "", // filled below
-          fileName: file.fileName,
+          claimId: "", // populated below
+          fileName: sanitizedFileName,
           fileUrl: file.fileUrl,
-          fileHash: file.fileHash || BlockchainService.hashIdentifier(file.fileName + Date.now()),
+          fileHash: file.fileHash || SecurityUtils.sha256(sanitizedFileName + Date.now()),
           fileSize: file.fileSize,
           mimeType: file.mimeType,
           uploadedAt: new Date().toISOString(),
@@ -156,6 +176,7 @@ export class ClaimService {
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       evidence: evidenceItems,
+      version: 1,
     };
 
     db.getClaims().set(claimId, newClaim);
@@ -214,22 +235,23 @@ export class ClaimService {
   }
 
   /**
-   * Staff approve claim flow with validation, audit, notifications and blockchain sync
+   * Staff approve claim flow with validation, audit, notifications, concurrency check and blockchain sync
    */
   public static async approveClaim(
     claimId: string,
     reviewer: { id: string; name: string; role: UserRole },
     approvedAmount: number,
     notes?: string,
-    idempotencyKey?: string
+    idempotencyKey?: string,
+    expectedVersion?: number
   ): Promise<{ claim: Claim; txHash?: string }> {
     if (reviewer.role !== UserRole.CLAIM_REVIEWER && reviewer.role !== UserRole.ADMIN) {
-      throw new Error("Forbidden: Only authorized claim reviewers or administrators can approve claims.");
+      throw new ForbiddenError("Forbidden: Only authorized claim reviewers or administrators can approve claims.");
     }
 
     const claim = db.getClaims().get(claimId);
     if (!claim) {
-      throw new Error("Claim not found.");
+      throw new NotFoundError("Claim", claimId);
     }
 
     // Idempotency: Don't re-approve if already approved
@@ -237,18 +259,21 @@ export class ClaimService {
       return { claim, txHash: claim.blockchainTxHash };
     }
 
-    // State transition check: Can only approve from SUBMITTED or UNDER_REVIEW
-    if (claim.status !== ClaimStatus.UNDER_REVIEW && claim.status !== ClaimStatus.SUBMITTED) {
-      throw new Error(`Invalid state transition: Cannot approve claim currently in '${claim.status}' state.`);
-    }
+    // Concurrency protection check (BE-14)
+    ClaimLifecycleEngine.assertVersionMatch(claim.version, expectedVersion);
+
+    // State transition check via Central Lifecycle Engine (BE-09)
+    ClaimLifecycleEngine.assertValidClaimTransition(claim.status, ClaimStatus.APPROVED);
 
     // Approved amount check
     if (typeof approvedAmount !== "number" || approvedAmount <= 0) {
-      throw new Error("Approved amount must be greater than 0.");
+      throw new ValidationError("Approved amount must be greater than 0.");
     }
 
     if (approvedAmount > claim.requestedAmount) {
-      throw new Error(`Approved amount ($${approvedAmount}) cannot exceed requested amount ($${claim.requestedAmount}).`);
+      throw new BusinessRuleError(
+        `Approved amount ($${approvedAmount}) cannot exceed requested amount ($${claim.requestedAmount}).`
+      );
     }
 
     // 1. Submit on-chain record
@@ -260,6 +285,7 @@ export class ClaimService {
     claim.reviewerId = reviewer.id;
     claim.reviewNotes = notes || "Approved after review of evidence and policy terms.";
     claim.blockchainTxHash = bcResult.txHash;
+    claim.version = (claim.version || 1) + 1;
     claim.updatedAt = new Date().toISOString();
     db.getClaims().set(claimId, claim);
 
@@ -320,35 +346,39 @@ export class ClaimService {
   }
 
   /**
-   * Staff reject claim flow
+   * Staff reject claim flow with validation, audit, notifications and concurrency check
    */
   public static async rejectClaim(
     claimId: string,
     reviewer: { id: string; name: string; role: UserRole },
     reason: string,
-    notes?: string
+    notes?: string,
+    expectedVersion?: number
   ): Promise<Claim> {
     if (reviewer.role !== UserRole.CLAIM_REVIEWER && reviewer.role !== UserRole.ADMIN) {
-      throw new Error("Forbidden: Only authorized claim reviewers or administrators can reject claims.");
+      throw new ForbiddenError("Forbidden: Only authorized claim reviewers or administrators can reject claims.");
     }
 
     if (!reason || reason.trim().length === 0) {
-      throw new Error("A specific rejection reason is mandatory.");
+      throw new ValidationError("A specific rejection reason is mandatory.");
     }
 
     const claim = db.getClaims().get(claimId);
     if (!claim) {
-      throw new Error("Claim not found.");
+      throw new NotFoundError("Claim", claimId);
     }
 
-    if (claim.status !== ClaimStatus.UNDER_REVIEW && claim.status !== ClaimStatus.SUBMITTED) {
-      throw new Error(`Invalid state transition: Cannot reject claim currently in '${claim.status}' state.`);
-    }
+    // Concurrency protection check (BE-14)
+    ClaimLifecycleEngine.assertVersionMatch(claim.version, expectedVersion);
+
+    // State transition check via Central Lifecycle Engine (BE-09)
+    ClaimLifecycleEngine.assertValidClaimTransition(claim.status, ClaimStatus.REJECTED);
 
     // Update claim
     claim.status = ClaimStatus.REJECTED;
     claim.reviewerId = reviewer.id;
     claim.reviewNotes = `Rejection: ${reason}. ${notes || ""}`.trim();
+    claim.version = (claim.version || 1) + 1;
     claim.updatedAt = new Date().toISOString();
     db.getClaims().set(claimId, claim);
 

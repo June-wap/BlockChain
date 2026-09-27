@@ -17,6 +17,7 @@ import {
   UserRole,
   UserStatus,
 } from "@/types";
+import { SecurityUtils } from "../core/security";
 
 export interface DatabaseState {
   users: Map<string, User & { passwordHash: string; status: UserStatus }>;
@@ -606,8 +607,10 @@ class InDatabaseStore {
   }
 
   public logAudit(entry: Omit<AuditLog, "id" | "timestamp">) {
+    const sanitizedMetadata = entry.metadata ? SecurityUtils.sanitizeMetadata(entry.metadata) : undefined;
     const log: AuditLog = {
       ...entry,
+      metadata: sanitizedMetadata,
       id: `aud-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
       timestamp: new Date().toISOString(),
     };

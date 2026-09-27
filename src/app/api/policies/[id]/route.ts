@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { PolicyService } from "@/server/services/policy.service";
-import { UserRole } from "@/types";
+import { AuthService } from "@/server/services/auth.service";
+import { handleApiError, AuthenticationError } from "@/server/core/errors";
 
 export const dynamic = "force-dynamic";
 
@@ -9,13 +10,17 @@ export async function GET(
   { params }: { params: { id: string } }
 ) {
   try {
-    const role = (request.cookies.get("auth_role")?.value as UserRole) || UserRole.CUSTOMER;
-    const { searchParams } = new URL(request.url);
-    const customerId = searchParams.get("customerId") || "usr_customer_default";
+    const token = request.cookies.get("auth_token")?.value;
+    const roleCookie = request.cookies.get("auth_role")?.value;
+    const user = AuthService.resolveUser(token, roleCookie);
+
+    if (!user) {
+      throw new AuthenticationError("Authentication required.");
+    }
 
     const result = PolicyService.getPolicyById(params.id, {
-      id: customerId,
-      role,
+      id: user.id,
+      role: user.role,
     });
 
     if (result.error) {
@@ -27,10 +32,6 @@ export async function GET(
 
     return NextResponse.json({ success: true, data: result.policy });
   } catch (error) {
-    console.error(`GET /api/policies/${params.id} error:`, error);
-    return NextResponse.json(
-      { success: false, error: "Internal server error" },
-      { status: 500 }
-    );
+    return handleApiError(error);
   }
 }

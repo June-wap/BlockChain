@@ -19,38 +19,36 @@ export async function GET(request: NextRequest) {
     RbacGuard.assertCanAdministerSystem(adminUser);
 
     const { searchParams } = new URL(request.url);
-    const action = searchParams.get("action");
-    const entity = searchParams.get("entity");
-    const search = searchParams.get("search")?.toLowerCase().trim();
+    const search = searchParams.get("search")?.toLowerCase().trim() || "";
+    const status = searchParams.get("status") || "ALL";
     const page = Math.max(1, parseInt(searchParams.get("page") || "1", 10));
-    const limit = Math.max(1, Math.min(100, parseInt(searchParams.get("limit") || "25", 10)));
+    const limit = Math.max(1, Math.min(100, parseInt(searchParams.get("limit") || "20", 10)));
 
-    let logs = db.getAuditLogs();
+    let claims = Array.from(db.getClaims().values());
 
-    if (action && action !== "ALL") {
-      logs = logs.filter((l) => l.action === action);
-    }
-
-    if (entity && entity !== "ALL") {
-      logs = logs.filter((l) => l.entityType === entity);
+    if (status && status !== "ALL") {
+      claims = claims.filter((c) => c.status === status);
     }
 
     if (search) {
-      logs = logs.filter(
-        (l) =>
-          l.actorName.toLowerCase().includes(search) ||
-          l.entityId.toLowerCase().includes(search) ||
-          l.action.toLowerCase().includes(search)
+      claims = claims.filter(
+        (c) =>
+          c.claimNumber.toLowerCase().includes(search) ||
+          c.id.toLowerCase().includes(search) ||
+          c.policyId.toLowerCase().includes(search) ||
+          (c.customerName && c.customerName.toLowerCase().includes(search))
       );
     }
 
-    const total = logs.length;
+    claims.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+    const total = claims.length;
     const startIndex = (page - 1) * limit;
-    const paginatedLogs = logs.slice(startIndex, startIndex + limit);
+    const paginatedClaims = claims.slice(startIndex, startIndex + limit);
 
     return NextResponse.json({
       success: true,
-      data: paginatedLogs,
+      data: paginatedClaims,
       meta: {
         page,
         limit,

@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { ClaimService } from "@/server/services/claim.service";
+import { AuthService } from "@/server/services/auth.service";
+import { RbacGuard } from "@/server/core/rbac";
+import { handleApiError, AuthenticationError } from "@/server/core/errors";
 import { UserRole } from "@/types";
 
 export const dynamic = "force-dynamic";
@@ -9,22 +12,30 @@ export async function POST(
   { params }: { params: { id: string } }
 ) {
   try {
-    const role = (request.cookies.get("auth_role")?.value as UserRole) || UserRole.CLAIM_REVIEWER;
-    const body = await request.json();
-    const { approvedAmount, notes, idempotencyKey, reviewerId, reviewerName } = body;
+    const token = request.cookies.get("auth_token")?.value;
+    const roleCookie = request.cookies.get("auth_role")?.value;
+    const user = AuthService.resolveUser(token, roleCookie);
 
-    const reviewer = {
-      id: reviewerId || "usr_reviewer_1",
-      name: reviewerName || "Le Minh Reviewer",
-      role,
-    };
+    if (!user) {
+      throw new AuthenticationError("Authentication required.");
+    }
+
+    RbacGuard.assertRole(user, [UserRole.CLAIM_REVIEWER, UserRole.ADMIN]);
+
+    const body = await request.json();
+    const { approvedAmount, notes, idempotencyKey, version } = body;
 
     const result = await ClaimService.approveClaim(
       params.id,
-      reviewer,
+      {
+        id: user.id,
+        name: user.fullName,
+        role: user.role,
+      },
       Number(approvedAmount),
       notes,
-      idempotencyKey
+      idempotencyKey,
+      version
     );
 
     return NextResponse.json({
@@ -32,11 +43,7 @@ export async function POST(
       data: result,
       message: "Claim approved successfully and recorded on-chain.",
     });
-  } catch (error: any) {
-    console.error(`POST /api/staff/claims/${params.id}/approve error:`, error);
-    return NextResponse.json(
-      { success: false, error: error.message || "Failed to approve claim" },
-      { status: 400 }
-    );
+  } catch (error) {
+    return handleApiError(error);
   }
 }

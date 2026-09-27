@@ -20,27 +20,29 @@ export async function POST(
       throw new AuthenticationError("Authentication required.");
     }
 
+    // Role check: Only CLAIM_REVIEWER or ADMIN
     RbacGuard.assertRole(user, [UserRole.CLAIM_REVIEWER, UserRole.ADMIN]);
 
     const body = await request.json();
-    const { reason, notes, version } = body;
+    const { approvedAmount, notes, idempotencyKey, version } = body;
 
-    const claim = await ClaimService.rejectClaim(
+    const result = await ClaimService.approveClaim(
       params.id,
       {
         id: user.id,
         name: user.fullName,
         role: user.role,
       },
-      reason,
+      Number(approvedAmount),
       notes,
+      idempotencyKey,
       version
     );
 
     return NextResponse.json({
       success: true,
-      data: claim,
-      message: "Claim rejected successfully.",
+      data: result,
+      message: "Claim approved successfully and recorded on-chain.",
     });
   } catch (error) {
     return handleApiError(error);

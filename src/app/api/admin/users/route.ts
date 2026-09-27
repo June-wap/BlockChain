@@ -1,15 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/server/db/store";
+import { AuthService } from "@/server/services/auth.service";
+import { RbacGuard } from "@/server/core/rbac";
+import { handleApiError, AuthenticationError } from "@/server/core/errors";
 import { UserRole } from "@/types";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(request: NextRequest) {
   try {
-    const role = request.cookies.get("auth_role")?.value;
-    if (role && role !== UserRole.ADMIN) {
-      return NextResponse.json({ success: false, error: "Forbidden: Admin role required" }, { status: 403 });
+    const token = request.cookies.get("auth_token")?.value;
+    const roleCookie = request.cookies.get("auth_role")?.value;
+    const adminUser = AuthService.resolveUser(token, roleCookie);
+
+    if (!adminUser) {
+      throw new AuthenticationError("Admin authentication required.");
     }
+
+    RbacGuard.assertCanAdministerSystem(adminUser);
 
     const { searchParams } = new URL(request.url);
     const search = searchParams.get("search")?.toLowerCase().trim() || "";
@@ -34,6 +42,7 @@ export async function GET(request: NextRequest) {
     const claims = Array.from(db.getClaims().values());
 
     const result = users.map((u) => {
+      // NEVER expose password hash
       const { passwordHash: _, ...safe } = u;
       const userPolicies = policies.filter((p) => p.customerId === u.id);
       const userClaims = claims.filter((c) => c.customerId === u.id);
@@ -50,6 +59,6 @@ export async function GET(request: NextRequest) {
       meta: { total: result.length },
     });
   } catch (error) {
-    return NextResponse.json({ success: false, error: "Failed to load users" }, { status: 500 });
+    return handleApiError(error);
   }
 }

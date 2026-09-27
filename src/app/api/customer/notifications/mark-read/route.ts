@@ -1,18 +1,26 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/server/db/store";
+import { AuthService } from "@/server/services/auth.service";
+import { handleApiError, AuthenticationError, ValidationError } from "@/server/core/errors";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json();
-    const { notificationId, markAll, customerId } = body;
+    const token = request.cookies.get("auth_token")?.value;
+    const roleCookie = request.cookies.get("auth_role")?.value;
+    const user = AuthService.resolveUser(token, roleCookie);
 
-    const targetUserId = customerId || "usr_customer_default";
+    if (!user) {
+      throw new AuthenticationError("Authentication required.");
+    }
+
+    const body = await request.json();
+    const { notificationId, markAll } = body;
 
     if (markAll) {
       for (const notif of db.getNotifications().values()) {
-        if (notif.userId === targetUserId) {
+        if (notif.userId === user.id) {
           notif.read = true;
         }
       }
@@ -21,15 +29,15 @@ export async function POST(request: NextRequest) {
 
     if (notificationId) {
       const notif = db.getNotifications().get(notificationId);
-      if (notif && notif.userId === targetUserId) {
+      if (notif && notif.userId === user.id) {
         notif.read = true;
         db.getNotifications().set(notif.id, notif);
       }
       return NextResponse.json({ success: true, message: "Notification marked as read." });
     }
 
-    return NextResponse.json({ success: false, error: "Invalid parameters" }, { status: 400 });
+    throw new ValidationError("Must specify either notificationId or markAll.");
   } catch (error) {
-    return NextResponse.json({ success: false, error: "Failed to update notification" }, { status: 500 });
+    return handleApiError(error);
   }
 }

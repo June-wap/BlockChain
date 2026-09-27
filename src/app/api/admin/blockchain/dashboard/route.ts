@@ -1,19 +1,50 @@
 import { NextRequest, NextResponse } from "next/server";
 import { BlockchainService } from "@/server/services/blockchain.service";
-import { UserRole } from "@/types";
+import { AuthService } from "@/server/services/auth.service";
+import { RbacGuard } from "@/server/core/rbac";
+import { handleApiError, AuthenticationError } from "@/server/core/errors";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(request: NextRequest) {
   try {
-    const role = request.cookies.get("auth_role")?.value;
-    if (role && role !== UserRole.ADMIN) {
-      return NextResponse.json({ success: false, error: "Forbidden: Admin role required" }, { status: 403 });
+    const token = request.cookies.get("auth_token")?.value;
+    const roleCookie = request.cookies.get("auth_role")?.value;
+    const adminUser = AuthService.resolveUser(token, roleCookie);
+
+    if (!adminUser) {
+      throw new AuthenticationError("Admin authentication required.");
     }
 
-    const telemetry = BlockchainService.getTelemetry();
-    return NextResponse.json({ success: true, data: telemetry });
+    RbacGuard.assertCanAdministerSystem(adminUser);
+
+    try {
+      const telemetry = BlockchainService.getTelemetry();
+      return NextResponse.json({ success: true, data: telemetry });
+    } catch {
+      // Degraded fallback when provider is unreachable (BE-30 requirement)
+      return NextResponse.json({
+        success: true,
+        data: {
+          network: "Sepolia Testnet (EVM)",
+          connectionStatus: "DEGRADED_FALLBACK",
+          contractAddress: "0x3918a10982301982b81092830192839182390182",
+          operatorAddress: "0x0A9213894b91819c9e8310d2918e91823901b891",
+          latestBlock: 0,
+          contractBalance: "N/A",
+          stats: {
+            totalTransactions: 0,
+            claimsRecorded: 0,
+            approvalsRecorded: 0,
+            paymentsRecorded: 0,
+            failedTransactions: 0,
+          },
+          recentTransactions: [],
+          notice: "Blockchain RPC node unreachable. Operating in fallback telemetry mode.",
+        },
+      });
+    }
   } catch (error) {
-    return NextResponse.json({ success: false, error: "Failed to load blockchain telemetry" }, { status: 500 });
+    return handleApiError(error);
   }
 }

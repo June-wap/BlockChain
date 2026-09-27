@@ -20,6 +20,7 @@ export async function POST(
       throw new AuthenticationError("Authentication required.");
     }
 
+    // Role check: Only CLAIM_REVIEWER or ADMIN
     RbacGuard.assertRole(user, [UserRole.CLAIM_REVIEWER, UserRole.ADMIN]);
 
     const body = await request.json();

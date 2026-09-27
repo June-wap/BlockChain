@@ -1,17 +1,22 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/server/db/store";
-import { UserRole } from "@/types";
+import { AuthService } from "@/server/services/auth.service";
+import { handleApiError, AuthenticationError } from "@/server/core/errors";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(request: NextRequest) {
   try {
-    const role = (request.cookies.get("auth_role")?.value as UserRole) || UserRole.CUSTOMER;
-    const { searchParams } = new URL(request.url);
-    const customerId = searchParams.get("customerId") || "usr_customer_default";
+    const token = request.cookies.get("auth_token")?.value;
+    const roleCookie = request.cookies.get("auth_role")?.value;
+    const user = AuthService.resolveUser(token, roleCookie);
+
+    if (!user) {
+      throw new AuthenticationError("Authentication required.");
+    }
 
     const notifs = Array.from(db.getNotifications().values())
-      .filter((n) => n.userId === customerId)
+      .filter((n) => n.userId === user.id)
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
     return NextResponse.json({
@@ -20,6 +25,6 @@ export async function GET(request: NextRequest) {
       unreadCount: notifs.filter((n) => !n.read).length,
     });
   } catch (error) {
-    return NextResponse.json({ success: false, error: "Failed to fetch notifications" }, { status: 500 });
+    return handleApiError(error);
   }
 }

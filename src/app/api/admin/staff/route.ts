@@ -1,15 +1,24 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/server/db/store";
+import { AuthService } from "@/server/services/auth.service";
+import { RbacGuard } from "@/server/core/rbac";
+import { SecurityUtils } from "@/server/core/security";
+import { handleApiError, AuthenticationError, NotFoundError, ValidationError, ConflictError } from "@/server/core/errors";
 import { AuditAction, UserRole, UserStatus } from "@/types";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(request: NextRequest) {
   try {
-    const role = request.cookies.get("auth_role")?.value;
-    if (role && role !== UserRole.ADMIN) {
-      return NextResponse.json({ success: false, error: "Forbidden: Admin role required" }, { status: 403 });
+    const token = request.cookies.get("auth_token")?.value;
+    const roleCookie = request.cookies.get("auth_role")?.value;
+    const adminUser = AuthService.resolveUser(token, roleCookie);
+
+    if (!adminUser) {
+      throw new AuthenticationError("Admin authentication required.");
     }
+
+    RbacGuard.assertCanAdministerSystem(adminUser);
 
     const staffUsers = Array.from(db.getUsers().values()).filter(
       (u) => u.role !== UserRole.CUSTOMER
@@ -25,16 +34,21 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({ success: true, data: safeStaff });
   } catch (error) {
-    return NextResponse.json({ success: false, error: "Failed to load staff" }, { status: 500 });
+    return handleApiError(error);
   }
 }
 
 export async function POST(request: NextRequest) {
   try {
-    const callerRole = request.cookies.get("auth_role")?.value;
-    if (callerRole && callerRole !== UserRole.ADMIN) {
-      return NextResponse.json({ success: false, error: "Forbidden: Admin role required" }, { status: 403 });
+    const token = request.cookies.get("auth_token")?.value;
+    const roleCookie = request.cookies.get("auth_role")?.value;
+    const adminUser = AuthService.resolveUser(token, roleCookie);
+
+    if (!adminUser) {
+      throw new AuthenticationError("Admin authentication required.");
     }
+
+    RbacGuard.assertCanAdministerSystem(adminUser);
 
     const body = await request.json();
     const { action, staffId, newRole, fullName, email, phone, role } = body;
@@ -42,12 +56,12 @@ export async function POST(request: NextRequest) {
     // 1. Role Change Action
     if (action === "CHANGE_ROLE") {
       if (!staffId || !newRole || !Object.values(UserRole).includes(newRole)) {
-        return NextResponse.json({ success: false, error: "Valid staffId and newRole are required." }, { status: 400 });
+        throw new ValidationError("Valid staffId and newRole are required.");
       }
 
       const staff = db.getUsers().get(staffId);
       if (!staff) {
-        return NextResponse.json({ success: false, error: "Staff member not found." }, { status: 404 });
+        throw new NotFoundError("Staff member", staffId);
       }
 
       const oldRole = staff.role;
@@ -55,66 +69,77 @@ export async function POST(request: NextRequest) {
       db.getUsers().set(staff.id, staff);
 
       db.logAudit({
-        actorId: "usr_admin_1",
-        actorName: "Admin Hoang Vu",
+        actorId: adminUser.id,
+        actorName: adminUser.fullName,
         role: UserRole.ADMIN,
         action: AuditAction.ROLE_CHANGED,
         entityType: "USER",
         entityId: staff.id,
-        metadata: { oldRole, newRole },
+        metadata: { oldRole, newRole, staffEmail: staff.email },
       });
 
-      const { passwordHash: _, ...safe } = staff;
+      const { passwordHash: _, ...safeStaff } = staff;
       return NextResponse.json({
         success: true,
-        data: safe,
-        message: `Role updated to ${newRole}.`,
+        data: safeStaff,
+        message: `Role for ${staff.fullName} updated to ${newRole}.`,
       });
     }
 
-    // 2. Create Staff Action
+    // 2. Create New Staff Member
     if (!fullName || !email || !role) {
-      return NextResponse.json({ success: false, error: "Full name, email, and staff role are required." }, { status: 400 });
+      throw new ValidationError("fullName, email, and role are required.");
     }
 
+    if (role === UserRole.CUSTOMER) {
+      throw new ValidationError("Staff members must have role CLAIM_REVIEWER, FINANCE, or ADMIN.");
+    }
+
+    const normalizedEmail = email.trim().toLowerCase();
     const existing = Array.from(db.getUsers().values()).find(
-      (u) => u.email.toLowerCase() === email.toLowerCase().trim()
+      (u) => u.email.toLowerCase() === normalizedEmail
     );
     if (existing) {
-      return NextResponse.json({ success: false, error: "User with this email already exists." }, { status: 409 });
+      throw new ConflictError("An account with this email address already exists.");
     }
 
-    const newId = `usr_staff_${Date.now()}`;
+    const newStaffId = `usr_${role.toLowerCase().replace(/[^a-z]/g, "")}_${Date.now()}`;
+    const defaultPassword = "password123";
+    const passwordHash = SecurityUtils.hashPassword(defaultPassword);
+
     const newStaff = {
-      id: newId,
-      email: email.trim().toLowerCase(),
+      id: newStaffId,
+      email: normalizedEmail,
       fullName: fullName.trim(),
       phone: phone?.trim(),
       role: role as UserRole,
       status: UserStatus.ACTIVE,
       createdAt: new Date().toISOString(),
-      passwordHash: "pbkdf2$10000$mockhashedpassword$secure",
+      passwordHash,
     };
 
-    db.getUsers().set(newId, newStaff);
+    db.getUsers().set(newStaffId, newStaff);
 
     db.logAudit({
-      actorId: "usr_admin_1",
-      actorName: "Admin Hoang Vu",
+      actorId: adminUser.id,
+      actorName: adminUser.fullName,
       role: UserRole.ADMIN,
-      action: AuditAction.ROLE_CHANGED,
+      action: AuditAction.USER_ACTIVATED,
       entityType: "USER",
-      entityId: newId,
-      metadata: { action: "STAFF_CREATED", assignedRole: role },
+      entityId: newStaffId,
+      metadata: { role, email: normalizedEmail },
     });
 
-    const { passwordHash: _, ...safe } = newStaff;
-    return NextResponse.json({
-      success: true,
-      data: safe,
-      message: "New staff member onboarded successfully.",
-    }, { status: 201 });
+    const { passwordHash: _, ...safeNewStaff } = newStaff;
+    return NextResponse.json(
+      {
+        success: true,
+        data: safeNewStaff,
+        message: `Staff member ${newStaff.fullName} created successfully.`,
+      },
+      { status: 201 }
+    );
   } catch (error) {
-    return NextResponse.json({ success: false, error: "Failed to process staff action" }, { status: 500 });
+    return handleApiError(error);
   }
 }

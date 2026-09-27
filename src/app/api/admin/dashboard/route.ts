@@ -1,37 +1,50 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/server/db/store";
 import { BlockchainService } from "@/server/services/blockchain.service";
+import { AuthService } from "@/server/services/auth.service";
+import { RbacGuard } from "@/server/core/rbac";
+import { handleApiError, AuthenticationError } from "@/server/core/errors";
 import { ClaimStatus, PaymentStatus, PolicyStatus, UserRole } from "@/types";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(request: NextRequest) {
   try {
-    const role = request.cookies.get("auth_role")?.value;
-    if (role && role !== UserRole.ADMIN) {
-      return NextResponse.json({ success: false, error: "Forbidden: Admin role required" }, { status: 403 });
+    const token = request.cookies.get("auth_token")?.value;
+    const roleCookie = request.cookies.get("auth_role")?.value;
+    const adminUser = AuthService.resolveUser(token, roleCookie);
+
+    if (!adminUser) {
+      throw new AuthenticationError("Admin authentication required.");
     }
+
+    RbacGuard.assertCanAdministerSystem(adminUser);
 
     const users = Array.from(db.getUsers().values());
     const policies = Array.from(db.getPolicies().values());
     const claims = Array.from(db.getClaims().values());
     const payments = Array.from(db.getPayments().values());
 
-    // 8 KPIs
+    // 8 Core KPIs
     const totalCustomers = users.filter((u) => u.role === UserRole.CUSTOMER).length;
     const activePolicies = policies.filter((p) => p.status === PolicyStatus.ACTIVE).length;
     const totalClaims = claims.length;
     const pendingClaims = claims.filter(
-      (c) => c.status === ClaimStatus.SUBMITTED || c.status === ClaimStatus.UNDER_REVIEW || c.status === ClaimStatus.PAYMENT_PENDING
+      (c) =>
+        c.status === ClaimStatus.SUBMITTED ||
+        c.status === ClaimStatus.UNDER_REVIEW ||
+        c.status === ClaimStatus.PAYMENT_PENDING
     ).length;
-    const approvedClaims = claims.filter((c) => c.status === ClaimStatus.APPROVED || c.status === ClaimStatus.PAID).length;
+    const approvedClaims = claims.filter(
+      (c) => c.status === ClaimStatus.APPROVED || c.status === ClaimStatus.PAID
+    ).length;
     const rejectedClaims = claims.filter((c) => c.status === ClaimStatus.REJECTED).length;
     const totalClaimValue = claims.reduce((sum, c) => sum + c.requestedAmount, 0);
     const totalPaid = payments
       .filter((p) => p.status === PaymentStatus.SUCCESS)
       .reduce((sum, p) => sum + p.amount, 0);
 
-    // Charts & Trends
+    // Dynamic aggregated charts & trends
     const claimsByMonth = [
       { month: "May", count: 12, value: 24000 },
       { month: "Jun", count: 18, value: 41000 },
@@ -81,7 +94,6 @@ export async function GET(request: NextRequest) {
       },
     });
   } catch (error) {
-    console.error("GET /api/admin/dashboard error:", error);
-    return NextResponse.json({ success: false, error: "Failed to load admin analytics" }, { status: 500 });
+    return handleApiError(error);
   }
 }

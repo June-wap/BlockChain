@@ -94,6 +94,7 @@ export interface Claim {
   createdAt: string;
   updatedAt: string;
   evidence?: EvidenceItem[];
+  version?: number;
 }
 
 // ==========================================

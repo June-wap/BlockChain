@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { ClaimService, CreateClaimInput } from "@/server/services/claim.service";
-import { AuthService } from "@/server/services/auth.service";
 import { db } from "@/server/db/store";
-import { handleApiError, AuthenticationError, ForbiddenError } from "@/server/core/errors";
+import { AuthService } from "@/server/services/auth.service";
+import { RbacGuard } from "@/server/core/rbac";
+import { handleApiError, AuthenticationError } from "@/server/core/errors";
 import { UserRole } from "@/types";
 
 export const dynamic = "force-dynamic";
@@ -17,33 +17,38 @@ export async function GET(request: NextRequest) {
       throw new AuthenticationError("Authentication required.");
     }
 
+    // Role check: Only CLAIM_REVIEWER, FINANCE, or ADMIN
+    RbacGuard.assertRole(user, [UserRole.CLAIM_REVIEWER, UserRole.FINANCE, UserRole.ADMIN]);
+
     const { searchParams } = new URL(request.url);
-    const requestedCustomerId = searchParams.get("customerId");
     const status = searchParams.get("status") || "ALL";
+    const insuranceType = searchParams.get("insuranceType") || "ALL";
+    const reviewerId = searchParams.get("reviewerId");
     const search = searchParams.get("search")?.toLowerCase().trim() || "";
     const page = Math.max(1, parseInt(searchParams.get("page") || "1", 10));
     const limit = Math.max(1, Math.min(100, parseInt(searchParams.get("limit") || "20", 10)));
 
     let claims = Array.from(db.getClaims().values());
 
-    // Role-based scoping & IDOR Protection:
-    if (user.role === UserRole.CUSTOMER) {
-      // If customer specifies a customerId that isn't their own, block it
-      if (requestedCustomerId && requestedCustomerId !== user.id) {
-        throw new ForbiddenError("Forbidden: You cannot access claims belonging to another customer.");
-      }
-      claims = claims.filter((c) => c.customerId === user.id);
-    } else if (requestedCustomerId) {
-      // Staff / Admin filtering by specific customer
-      claims = claims.filter((c) => c.customerId === requestedCustomerId);
-    }
-
     // Status filter
     if (status && status !== "ALL") {
       claims = claims.filter((c) => c.status === status);
     }
 
-    // Search filter (Claim Number, Policy ID, or Customer Name)
+    // Reviewer assignment filter
+    if (reviewerId) {
+      claims = claims.filter((c) => c.reviewerId === reviewerId);
+    }
+
+    // Policy insurance type filter
+    if (insuranceType && insuranceType !== "ALL") {
+      claims = claims.filter((c) => {
+        const policy = db.getPolicies().get(c.policyId);
+        return policy && policy.type.toLowerCase().includes(insuranceType.toLowerCase());
+      });
+    }
+
+    // Search filter
     if (search) {
       claims = claims.filter(
         (c) =>
@@ -71,36 +76,6 @@ export async function GET(request: NextRequest) {
         totalPages: Math.ceil(total / limit),
       },
     });
-  } catch (error) {
-    return handleApiError(error);
-  }
-}
-
-export async function POST(request: NextRequest) {
-  try {
-    const token = request.cookies.get("auth_token")?.value;
-    const roleCookie = request.cookies.get("auth_role")?.value;
-    const user = AuthService.resolveUser(token, roleCookie);
-
-    if (!user) {
-      throw new AuthenticationError("Authentication required to submit claims.");
-    }
-
-    const body: CreateClaimInput = await request.json();
-
-    // STRICT: Customer identity is derived from verified user, NEVER from untrusted client input
-    const customerId = user.id;
-    const customerName = user.fullName;
-
-    const result = await ClaimService.submitClaim(customerId, customerName, body);
-
-    return NextResponse.json(
-      {
-        success: true,
-        data: result.claim,
-      },
-      { status: 201 }
-    );
   } catch (error) {
     return handleApiError(error);
   }
