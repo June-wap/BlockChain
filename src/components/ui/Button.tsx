@@ -11,7 +11,7 @@ export interface ButtonProps
     | "ghost"
     | "danger"
     | "success";
-  size?: "sm" | "md" | "lg";
+  size?: "xs" | "sm" | "md" | "lg";
   isLoading?: boolean;
   leftIcon?: React.ReactNode;
   rightIcon?: React.ReactNode;
@@ -54,6 +54,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
     };
 
     const sizeStyles = {
+      xs: "h-7 px-2.5 text-xs rounded-md gap-1",
       sm: "h-8 px-3 text-xs rounded-lg gap-1.5",
       md: "h-9.5 px-4 text-sm rounded-lg gap-2",
       lg: "h-11 px-5 text-base rounded-xl gap-2.5",

@@ -144,15 +144,15 @@ export function getClaimStatusConfig(status: ClaimStatus): StatusConfig {
     case ClaimStatus.PAYMENT_PENDING:
       return {
         label: "Payment Pending",
-        badgeClass: "bg-indigo-100 text-indigo-800 border-indigo-200",
-        dotClass: "bg-indigo-500",
+        badgeClass: "bg-amber-100 text-amber-800 border-amber-200",
+        dotClass: "bg-amber-500",
         description: "Approved payment is queued for smart contract or bank disbursement.",
       };
     case ClaimStatus.PAID:
       return {
         label: "Paid",
-        badgeClass: "bg-green-100 text-green-800 border-green-200",
-        dotClass: "bg-green-600",
+        badgeClass: "bg-emerald-100 text-emerald-800 border-emerald-200",
+        dotClass: "bg-emerald-600",
         description: "Funds disbursed successfully and confirmed on blockchain/receipt.",
       };
     default:

@@ -1,163 +1,251 @@
 "use client";
 
-import React from "react";
+import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import { useAuth } from "@/lib/auth-context";
-import { formatCurrency, formatDate, getClaimStatusConfig } from "@/lib/formatters";
-import { ClaimStatus } from "@/types";
-import { FileCheck, ArrowUpRight, CheckCircle2, Clock, XCircle, DollarSign } from "lucide-react";
+import { Claim, ClaimStatus } from "@/types";
+import { fetchClaims } from "@/lib/api/claims";
+import { formatCurrency, formatDate } from "@/lib/formatters";
+import {
+  FileCheck,
+  ArrowUpRight,
+  CheckCircle2,
+  Clock,
+  XCircle,
+  AlertTriangle,
+  RefreshCw,
+  Eye,
+  Calendar,
+  Layers,
+} from "lucide-react";
+import { Button } from "@/components/ui/Button";
+import { StatusBadge } from "@/components/ui/StatusBadge";
+import { Skeleton } from "@/components/ui/Skeleton";
+import { EmptyState } from "@/components/ui/EmptyState";
+
+function getWaitingDuration(submittedDate: string): string {
+  const diffMs = Date.now() - new Date(submittedDate).getTime();
+  const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+  if (diffHours < 1) return "< 1 hour";
+  if (diffHours < 24) return `${diffHours} hours`;
+  const diffDays = Math.floor(diffHours / 24);
+  return `${diffDays} day${diffDays > 1 ? "s" : ""}`;
+}
 
 export default function StaffDashboardPage() {
   const { user } = useAuth();
+  const [claims, setClaims] = useState<Claim[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  const reviewQueue = [
-    {
-      id: "clm-501",
-      claimNumber: "CLM-2026-881",
-      customerName: "Nguyen Van A",
-      policyType: "Health Comprehensive",
-      requestedAmount: 1850,
-      status: ClaimStatus.SUBMITTED,
-      submittedDate: "2026-09-26",
-    },
-    {
-      id: "clm-503",
-      claimNumber: "CLM-2026-904",
-      customerName: "Tran Van Minh",
-      policyType: "Motor Vehicle Premium",
-      requestedAmount: 3400,
-      status: ClaimStatus.UNDER_REVIEW,
-      submittedDate: "2026-09-25",
-    },
-  ];
+  const loadData = async () => {
+    setIsLoading(true);
+    setErrorMessage(null);
+    try {
+      const data = await fetchClaims();
+      setClaims(data);
+    } catch (err: any) {
+      setErrorMessage(err.message || "Failed to load staff queue data.");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadData();
+  }, []);
+
+  const pendingReviewCount = claims.filter((c) => c.status === ClaimStatus.SUBMITTED).length;
+  const underReviewCount = claims.filter((c) => c.status === ClaimStatus.UNDER_REVIEW).length;
+  const approvedCount = claims.filter((c) => c.status === ClaimStatus.APPROVED || c.status === ClaimStatus.PAID).length;
+  const rejectedCount = claims.filter((c) => c.status === ClaimStatus.REJECTED).length;
+
+  const attentionClaims = claims.filter(
+    (c) => c.status === ClaimStatus.SUBMITTED || c.status === ClaimStatus.UNDER_REVIEW
+  );
 
   return (
-    <div className="space-y-6">
-      {/* Banner */}
-      <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 rounded-2xl p-6 sm:p-8 text-white shadow-md">
-        <div className="space-y-2 max-w-2xl">
-          <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-violet-500/20 text-violet-300 border border-violet-500/30 inline-block">
-            Staff Operations Desk
+    <div className="space-y-6 max-w-7xl mx-auto pb-12">
+      {/* Header Banner */}
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 sm:p-8 text-white shadow-md flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div className="space-y-1.5 max-w-2xl">
+          <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-brand-500/20 text-brand-300 border border-brand-500/30 inline-block">
+            Staff Underwriting & Operations
           </span>
-          <h2 className="text-2xl sm:text-3xl font-extrabold tracking-tight">
-            Review Desk: {user?.fullName || "Staff Member"}
-          </h2>
-          <p className="text-sm text-slate-300">
-            Validate policy terms, inspect uploaded evidence hashes, and approve/reject claims with recorded justification.
+          <h1 className="text-xl sm:text-2xl font-bold tracking-tight">
+            Welcome, {user?.fullName || "Insurance Staff"} ({user?.role || "CLAIM_REVIEWER"})
+          </h1>
+          <p className="text-xs sm:text-sm text-slate-300">
+            Review submitted insurance incidents, verify document integrity, and approve or reject claims with recorded justifications.
           </p>
-          <div className="pt-2 flex flex-wrap gap-3">
-            <Link
-              href="/staff/claims"
-              className="inline-flex items-center gap-2 px-4 py-2 bg-violet-600 hover:bg-violet-500 text-white rounded-xl text-xs font-semibold shadow-sm transition"
-            >
-              <FileCheck className="w-4 h-4" />
-              Open Claims Queue
-            </Link>
-          </div>
         </div>
+
+        <Link href="/staff/claims">
+          <Button variant="primary" size="md">
+            <FileCheck className="w-4 h-4 mr-2" />
+            Open Full Claim Queue
+          </Button>
+        </Link>
       </div>
 
-      {/* Metric Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
-        <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs">
+      {/* 4 Metric Cards (FE-16) */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="bg-white dark:bg-slate-800 p-5 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-xs">
           <div className="flex items-center justify-between text-slate-500 mb-1">
-            <span className="text-xs font-medium">Awaiting Assignment</span>
+            <span className="text-xs font-medium uppercase tracking-wider text-slate-400">
+              Pending Review
+            </span>
             <Clock className="w-4 h-4 text-blue-500" />
           </div>
-          <h3 className="text-2xl font-bold text-slate-900">12</h3>
-          <p className="text-xs text-blue-600 font-medium mt-1">Submitted in last 24h</p>
+          <h3 className="text-2xl font-bold text-slate-900 dark:text-white">
+            {isLoading ? "..." : pendingReviewCount}
+          </h3>
+          <p className="text-[11px] text-blue-600 dark:text-blue-400 font-medium mt-1">
+            Newly received claims
+          </p>
         </div>
 
-        <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs">
+        <div className="bg-white dark:bg-slate-800 p-5 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-xs">
           <div className="flex items-center justify-between text-slate-500 mb-1">
-            <span className="text-xs font-medium">Under Active Review</span>
+            <span className="text-xs font-medium uppercase tracking-wider text-slate-400">
+              Under Review
+            </span>
             <FileCheck className="w-4 h-4 text-amber-500" />
           </div>
-          <h3 className="text-2xl font-bold text-slate-900">5</h3>
-          <p className="text-xs text-amber-600 font-medium mt-1">Requires evidence check</p>
+          <h3 className="text-2xl font-bold text-slate-900 dark:text-white">
+            {isLoading ? "..." : underReviewCount}
+          </h3>
+          <p className="text-[11px] text-amber-600 dark:text-amber-400 font-medium mt-1">
+            Active evidence audit
+          </p>
         </div>
 
-        <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs">
+        <div className="bg-white dark:bg-slate-800 p-5 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-xs">
           <div className="flex items-center justify-between text-slate-500 mb-1">
-            <span className="text-xs font-medium">Approved Today</span>
+            <span className="text-xs font-medium uppercase tracking-wider text-slate-400">
+              Approved
+            </span>
             <CheckCircle2 className="w-4 h-4 text-emerald-500" />
           </div>
-          <h3 className="text-2xl font-bold text-slate-900">8</h3>
-          <p className="text-xs text-emerald-600 font-medium mt-1">Total {formatCurrency(28400)}</p>
+          <h3 className="text-2xl font-bold text-slate-900 dark:text-white">
+            {isLoading ? "..." : approvedCount}
+          </h3>
+          <p className="text-[11px] text-emerald-600 dark:text-emerald-400 font-medium mt-1">
+            Settled or pending payout
+          </p>
         </div>
 
-        <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs">
+        <div className="bg-white dark:bg-slate-800 p-5 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-xs">
           <div className="flex items-center justify-between text-slate-500 mb-1">
-            <span className="text-xs font-medium">Payouts Pending</span>
-            <DollarSign className="w-4 h-4 text-indigo-500" />
+            <span className="text-xs font-medium uppercase tracking-wider text-slate-400">
+              Rejected
+            </span>
+            <XCircle className="w-4 h-4 text-red-500" />
           </div>
-          <h3 className="text-2xl font-bold text-slate-900">3</h3>
-          <p className="text-xs text-indigo-600 font-medium mt-1">Ready for finance release</p>
+          <h3 className="text-2xl font-bold text-slate-900 dark:text-white">
+            {isLoading ? "..." : rejectedCount}
+          </h3>
+          <p className="text-[11px] text-red-600 dark:text-red-400 font-medium mt-1">
+            Outside policy limits
+          </p>
         </div>
       </div>
 
-      {/* Review Queue Preview */}
-      <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs p-6 space-y-4">
+      {/* Error Banner */}
+      {errorMessage && (
+        <div className="p-4 rounded-xl bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <AlertTriangle className="w-5 h-5 text-red-600 dark:text-red-400 shrink-0" />
+            <p className="text-xs text-red-700 dark:text-red-300">{errorMessage}</p>
+          </div>
+          <Button variant="secondary" size="sm" onClick={loadData}>
+            <RefreshCw className="w-3.5 h-3.5 mr-1.5" />
+            Retry
+          </Button>
+        </div>
+      )}
+
+      {/* Claims Requiring Attention */}
+      <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-xs p-6 space-y-4">
         <div className="flex items-center justify-between">
           <div>
-            <h3 className="text-base font-bold text-slate-900">Priority Claims for Assessment</h3>
-            <p className="text-xs text-slate-500">Click &apos;Review Claim&apos; to inspect evidence and execute determination</p>
+            <h2 className="text-base font-bold text-slate-900 dark:text-white">
+              Claims Requiring Immediate Attention
+            </h2>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              Claims awaiting initial assessment or active evidence verification
+            </p>
           </div>
           <Link
             href="/staff/claims"
-            className="text-xs text-violet-600 hover:text-violet-700 font-semibold flex items-center gap-1"
+            className="text-xs text-brand-600 dark:text-brand-400 hover:underline font-semibold flex items-center gap-1"
           >
-            Full Queue
+            <span>View Full Queue</span>
             <ArrowUpRight className="w-3.5 h-3.5" />
           </Link>
         </div>
 
-        <div className="divide-y divide-slate-100">
-          {reviewQueue.map((item) => {
-            const statusCfg = getClaimStatusConfig(item.status);
-            return (
+        {isLoading ? (
+          <div className="space-y-3 py-2">
+            {[1, 2, 3].map((i) => (
+              <Skeleton key={i} className="h-16 w-full rounded-xl" />
+            ))}
+          </div>
+        ) : attentionClaims.length === 0 ? (
+          <EmptyState
+            title="Queue is completely clear!"
+            description="There are currently no pending or unreviewed claims in the system."
+            icon="CheckCircle2"
+          />
+        ) : (
+          <div className="divide-y divide-slate-100 dark:divide-slate-700/60">
+            {attentionClaims.map((item) => (
               <div
                 key={item.id}
-                className="py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4"
+                className="py-4 flex flex-col md:flex-row md:items-center justify-between gap-4 hover:bg-slate-50/50 dark:hover:bg-slate-750/30 rounded-xl px-2 transition"
               >
-                <div>
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="font-bold text-sm text-slate-900">
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono text-xs font-bold text-slate-900 dark:text-white">
                       {item.claimNumber}
                     </span>
-                    <span
-                      className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${statusCfg.badgeClass}`}
-                    >
-                      {statusCfg.label}
-                    </span>
+                    <StatusBadge status={item.status} />
                   </div>
-                  <div className="text-xs text-slate-500 flex flex-wrap items-center gap-3">
-                    <span>Applicant: <strong className="text-slate-700">{item.customerName}</strong></span>
+                  <div className="text-xs text-slate-500 dark:text-slate-400 flex flex-wrap items-center gap-3">
+                    <span>
+                      Applicant: <strong className="text-slate-800 dark:text-slate-200">{item.customerName || "Customer"}</strong>
+                    </span>
                     <span>&middot;</span>
-                    <span>Plan: {item.policyType}</span>
+                    <span>Policy: {item.policyId}</span>
                     <span>&middot;</span>
-                    <span>Submitted: {formatDate(item.submittedDate)}</span>
+                    <span>Submitted: {formatDate(item.createdAt)}</span>
+                    <span>&middot;</span>
+                    <span className="text-amber-600 dark:text-amber-400 font-medium">
+                      Waiting: {getWaitingDuration(item.createdAt)}
+                    </span>
                   </div>
                 </div>
 
-                <div className="flex items-center gap-4 shrink-0">
+                <div className="flex items-center gap-4 shrink-0 justify-between md:justify-end">
                   <div className="text-right">
-                    <span className="text-xs text-slate-400 block">Claim Amount</span>
-                    <span className="text-sm font-bold text-slate-900">
+                    <span className="text-[10px] uppercase text-slate-400 block font-medium">
+                      Claim Amount
+                    </span>
+                    <span className="text-sm font-bold text-slate-900 dark:text-white">
                       {formatCurrency(item.requestedAmount)}
                     </span>
                   </div>
-                  <Link
-                    href={`/staff/claims/${item.id}/review`}
-                    className="px-3.5 py-2 rounded-xl bg-violet-600 hover:bg-violet-500 text-white text-xs font-semibold shadow-xs transition"
-                  >
-                    Review Claim
+                  <Link href={`/staff/claims/${item.id}/review`}>
+                    <Button variant="primary" size="sm">
+                      <FileCheck className="w-3.5 h-3.5 mr-1.5" />
+                      Review Claim
+                    </Button>
                   </Link>
                 </div>
               </div>
-            );
-          })}
-        </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
