@@ -21,7 +21,13 @@ export const ROUTE_PERMISSIONS: RouteRule[] = [
   },
 ];
 
-export const PUBLIC_ROUTES = ["/", "/login", "/register", "/unauthorized"];
+export const PUBLIC_ROUTES = [
+  "/",
+  "/login",
+  "/register",
+  "/unauthorized",
+  "/design-system",
+];
 
 /**
  * Check if a path requires authentication

@@ -38,6 +38,12 @@ export default function HomePage() {
           </div>
 
           <div className="flex items-center gap-3">
+            <Link
+              href="/design-system"
+              className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-brand-400 hover:text-brand-300 text-xs font-semibold border border-slate-700 transition"
+            >
+              Design System
+            </Link>
             {isAuthenticated && user ? (
               <div className="flex items-center gap-3">
                 <span className="text-xs text-slate-400 hidden sm:inline">
