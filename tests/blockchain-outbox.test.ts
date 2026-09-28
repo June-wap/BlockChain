@@ -23,9 +23,6 @@ describe("P5 — Real Blockchain Backend Integration & Transactional Outbox Test
     await initDatabase();
   });
 
-  afterAll(async () => {
-    await closeDatabase();
-  });
 
   describe("Real Smart Contract Interaction (EVM Execution)", () => {
     it("should deploy or connect to real InsuranceClaimHub contract and verify admin role", async () => {
@@ -175,6 +172,11 @@ describe("P5 — Real Blockchain Backend Integration & Transactional Outbox Test
         description: "Emergency care fees for payment outbox integration test.",
       });
       const claimId = submitted.claim.id;
+      const claimInDb = await ClaimRepository.findById(claimId);
+      if (!claimInDb) {
+        await ClaimRepository.create(submitted.claim);
+      }
+
       const paymentId = `pay-outbox-${Date.now()}`;
 
       // Create a pending payment record

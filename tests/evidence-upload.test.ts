@@ -50,9 +50,6 @@ describe("P2 — Evidence Upload, SHA-256 Storage & Access Control Tests", () =>
     testClaimId = res.claim.id;
   });
 
-  afterAll(async () => {
-    await closeDatabase();
-  });
 
   // 1. Magic Bytes Validation
   describe("Magic Bytes & File Type Validation (P2.2)", () => {

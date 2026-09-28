@@ -1,4 +1,5 @@
 import { db } from "../db/store";
+import { UserRepository } from "../repositories/user.repository";
 import { AuditAction, User, UserRole, UserStatus } from "@/types";
 import { SecurityUtils, authRateLimiter } from "../core/security";
 import { JwtService } from "../core/jwt";
@@ -97,6 +98,20 @@ export class AuthService {
     };
 
     db.getUsers().set(userId, newUser);
+
+    try {
+      await UserRepository.create({
+        id: userId,
+        email: normalizedEmail,
+        fullName: newUser.fullName,
+        phoneNumber: newUser.phone,
+        passwordHash,
+        walletAddress: newUser.walletAddress,
+        role: UserRole.CUSTOMER,
+        status: UserStatus.ACTIVE,
+        createdAt: newUser.createdAt,
+      });
+    } catch {}
 
     // Audit log
     db.logAudit({

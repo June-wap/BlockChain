@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { ClaimService } from "@/server/services/claim.service";
 import { db } from "@/server/db/store";
 import { RbacGuard } from "@/server/core/rbac";
 import { handleApiError, AuthenticationError, NotFoundError } from "@/server/core/errors";
@@ -20,29 +21,13 @@ export async function POST(
 
     RbacGuard.assertRole(user, [UserRole.CLAIM_REVIEWER, UserRole.ADMIN]);
 
-    const claim = db.getClaims().get(params.id);
-    if (!claim) {
-      throw new NotFoundError("Claim", params.id);
-    }
+    const updatedClaim = await ClaimService.startReview(params.id, {
+      id: user.id,
+      name: user.fullName,
+      role: user.role,
+    });
 
-    if (claim.status === ClaimStatus.SUBMITTED) {
-      claim.status = ClaimStatus.UNDER_REVIEW;
-      claim.reviewerId = user.id;
-      claim.version = (claim.version || 1) + 1;
-      claim.updatedAt = new Date().toISOString();
-      db.getClaims().set(claim.id, claim);
-
-      db.logAudit({
-        actorId: user.id,
-        actorName: user.fullName,
-        role: user.role,
-        action: AuditAction.CLAIM_REVIEW_STARTED,
-        entityType: "CLAIM",
-        entityId: claim.id,
-      });
-    }
-
-    return NextResponse.json({ success: true, data: claim });
+    return NextResponse.json({ success: true, data: updatedClaim });
   } catch (error) {
     return handleApiError(error);
   }
