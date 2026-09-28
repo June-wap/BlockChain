@@ -1,11 +1,6 @@
 import * as jose from "jose";
 import { UserRole } from "@/types";
 
-const JWT_SECRET_STRING =
-  process.env.JWT_SECRET ||
-  "antigravity-insurance-claim-processing-system-production-secret-key-32-chars-min!";
-
-const JWT_SECRET = new TextEncoder().encode(JWT_SECRET_STRING);
 const ISSUER = "insurance-system";
 const AUDIENCE = "insurance-app";
 const EXPIRATION_TIME = "7d";
@@ -19,9 +14,41 @@ export interface TokenPayload {
 
 export class JwtService {
   /**
+   * Resolves and validates JWT secret with fail-fast security in production
+   */
+  public static getSecret(): Uint8Array {
+    const secret = process.env.JWT_SECRET;
+    const isProd = process.env.NODE_ENV === "production";
+
+    if (isProd) {
+      if (!secret || secret.trim().length < 32) {
+        throw new Error(
+          "FATAL: JWT_SECRET environment variable must be provided in production and be at least 32 characters long."
+        );
+      }
+      return new TextEncoder().encode(secret.trim());
+    }
+
+    if (secret !== undefined && secret !== null) {
+      if (secret.trim().length < 32) {
+        throw new Error(
+          "JWT_SECRET is insecure: minimum length of 32 characters is required."
+        );
+      }
+      return new TextEncoder().encode(secret.trim());
+    }
+
+    // Safe fallback for local development & unit tests only
+    return new TextEncoder().encode(
+      "antigravity-insurance-claim-processing-system-production-secret-key-32-chars-min!"
+    );
+  }
+
+  /**
    * Generates a cryptographically signed JWT using HS256 with standard claims (iat, exp, iss, aud)
    */
   public static async signToken(payload: TokenPayload): Promise<string> {
+    const secret = this.getSecret();
     const jwt = await new jose.SignJWT({
       userId: payload.userId,
       email: payload.email,
@@ -33,7 +60,7 @@ export class JwtService {
       .setIssuer(ISSUER)
       .setAudience(AUDIENCE)
       .setExpirationTime(EXPIRATION_TIME)
-      .sign(JWT_SECRET);
+      .sign(secret);
 
     return jwt;
   }
@@ -50,7 +77,8 @@ export class JwtService {
     if (!token || typeof token !== "string") return null;
 
     try {
-      const { payload } = await jose.jwtVerify(token, JWT_SECRET, {
+      const secret = this.getSecret();
+      const { payload } = await jose.jwtVerify(token, secret, {
         issuer: ISSUER,
         audience: AUDIENCE,
       });

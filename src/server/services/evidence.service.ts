@@ -2,14 +2,12 @@ import fs from "fs";
 import path from "path";
 import crypto from "crypto";
 import { EvidenceItem, UserRole } from "@/types";
-import { db } from "../db/store";
 import { ClaimRepository } from "../repositories/claim.repository";
-import { EvidenceRepository, ClaimDocumentRecord } from "../repositories/evidence.repository";
+import { EvidenceRepository } from "../repositories/evidence.repository";
 import { RbacGuard } from "../core/rbac";
 import {
   ValidationError,
   NotFoundError,
-  ForbiddenError,
   AuthenticationError,
 } from "../core/errors";
 
@@ -162,7 +160,7 @@ export class EvidenceService {
     // 5. If claimId is provided, enforce access control
     let validatedClaimId: string | null = null;
     if (claimId) {
-      const claim = (await ClaimRepository.findById(claimId)) || db.getClaims().get(claimId);
+      const claim = await ClaimRepository.findById(claimId);
       if (!claim) {
         throw new NotFoundError("Claim", claimId);
       }
@@ -179,7 +177,7 @@ export class EvidenceService {
 
     await fs.promises.writeFile(absolutePath, fileBuffer);
 
-    // 7. Store metadata in PostgreSQL & in-memory store
+    // 7. Store metadata in PostgreSQL
     const uploadedAt = new Date().toISOString();
     await EvidenceRepository.create({
       id: docId,
@@ -205,13 +203,12 @@ export class EvidenceService {
       uploadedAt,
     };
 
-    db.getState().claimDocuments.set(docId, evidenceItem);
-
     return evidenceItem;
   }
 
   /**
-   * Retrieve evidence binary with strict ownership and RBAC enforcement (P2.5)
+   * Retrieve evidence binary with strict ownership and RBAC enforcement (P2.5).
+   * Single source of truth: PostgreSQL + local disk. Zero mock fallbacks.
    */
   public static async getEvidenceBinary(
     claimId: string,
@@ -228,33 +225,46 @@ export class EvidenceService {
       throw new AuthenticationError("Authentication required.");
     }
 
-    // 1. Verify Claim and Ownership
-    const claim = await ClaimRepository.findById(claimId) || db.getClaims().get(claimId);
+    // 1. Verify Claim and Ownership from authoritative PostgreSQL
+    const claim = await ClaimRepository.findById(claimId);
     if (!claim) {
       throw new NotFoundError("Claim", claimId);
     }
 
     RbacGuard.assertOwnership(claim.customerId, user, { allowStaff: true, allowAdmin: true });
 
-    // 2. Lookup Evidence Document in PostgreSQL / memory
+    // 2. Lookup Evidence Document in PostgreSQL
     let docRecord = await EvidenceRepository.findById(evidenceId);
-    let docMemory = db.getState().claimDocuments.get(evidenceId) || claim.evidence?.find((e) => e.id === evidenceId);
+    const docFromClaim = claim.evidence?.find((e) => e.id === evidenceId);
 
-    const fileName = docRecord?.originalFilename || docMemory?.fileName || "evidence_document";
-    const mimeType = docRecord?.mimeType || docMemory?.mimeType || "application/octet-stream";
-    const fileHash = docRecord?.fileHash || docMemory?.fileHash || "";
-    const storageKey = docRecord?.storageKey || evidenceId;
+    const fileName = docRecord?.originalFilename || docFromClaim?.fileName || "evidence_document";
+    const mimeType = docRecord?.mimeType || docFromClaim?.mimeType || "application/octet-stream";
+    const fileHash = docRecord?.fileHash || docFromClaim?.fileHash || "";
+    const storageKey = docRecord?.storageKey || (docFromClaim ? `${docFromClaim.id}_${docFromClaim.fileName}` : evidenceId);
 
     // 3. Resolve file from private storage
     const targetPath = path.join(this.PRIVATE_STORAGE_DIR, storageKey);
 
-    let buffer: Buffer;
-    if (fs.existsSync(targetPath)) {
-      buffer = await fs.promises.readFile(targetPath);
-    } else {
-      // Fallback for seed mock files where binary wasn't uploaded via disk
-      buffer = Buffer.from(`%PDF-1.4\n%Mock evidence content for ${fileName}\n%%EOF`);
+    if (!fs.existsSync(targetPath)) {
+      // Check if file is stored directly with docId prefix
+      const files = fs.readdirSync(this.PRIVATE_STORAGE_DIR);
+      const match = files.find((f) => f.startsWith(evidenceId));
+      if (match) {
+        const altPath = path.join(this.PRIVATE_STORAGE_DIR, match);
+        const buffer = await fs.promises.readFile(altPath);
+        return {
+          buffer,
+          fileName,
+          mimeType,
+          fileSize: buffer.length,
+          fileHash,
+        };
+      }
+
+      throw new NotFoundError("Evidence file not found on disk storage", evidenceId);
     }
+
+    const buffer = await fs.promises.readFile(targetPath);
 
     return {
       buffer,
