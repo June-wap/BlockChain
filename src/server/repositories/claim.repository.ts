@@ -237,6 +237,14 @@ export class ClaimRepository {
     return this.mapRow(res.rows[0]);
   }
 
+  public static async updateBlockchainTx(id: string, txHash: string, client?: IDatabaseClient): Promise<void> {
+    const db = client || dbConnection;
+    await db.query(
+      `UPDATE claims SET blockchain_tx_hash = $1, updated_at = NOW() WHERE id = $2;`,
+      [txHash, id]
+    );
+  }
+
   public static async count(): Promise<number> {
     const res = await dbConnection.query(`SELECT COUNT(*) as count FROM claims;`);
     return parseInt(res.rows[0]?.count || "0", 10);

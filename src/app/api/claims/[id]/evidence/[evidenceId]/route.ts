@@ -48,7 +48,7 @@ export async function GET(
 
     // Binary response from private storage
     const dispositionType = isDownload ? "attachment" : "inline";
-    return new NextResponse(evidence.buffer, {
+    return new NextResponse(new Uint8Array(evidence.buffer), {
       status: 200,
       headers: {
         "Content-Type": evidence.mimeType,

@@ -4,6 +4,9 @@ import { BlockchainService } from "@/server/services/blockchain.service";
 import { AuditAction, ClaimStatus, NotificationType, PaymentStatus, UserRole } from "@/types";
 import { getAuthenticatedUser } from "@/server/core/auth-extractor";
 import { RbacGuard } from "@/server/core/rbac";
+import { PaymentRepository } from "@/server/repositories/payment.repository";
+import { ClaimRepository } from "@/server/repositories/claim.repository";
+import { OutboxRepository } from "@/server/repositories/outbox.repository";
 
 export const dynamic = "force-dynamic";
 
@@ -63,6 +66,27 @@ export async function POST(
       claim.updatedAt = new Date().toISOString();
       db.getClaims().set(claim.id, claim);
     }
+
+    // Persist to PostgreSQL and Outbox
+    await PaymentRepository.update({
+      ...payment,
+      status: PaymentStatus.SUCCESS,
+      blockchainTxHash: bcResult.txHash,
+      processedAt: new Date().toISOString(),
+    }).catch(() => {});
+    await ClaimRepository.updateBlockchainTx(payment.claimId, bcResult.txHash).catch(() => {});
+    await OutboxRepository.create({
+      aggregateType: "PAYMENT",
+      aggregateId: payment.id,
+      eventType: "PAYMENT_DISBURSED",
+      payload: {
+        paymentId: payment.id,
+        claimId: payment.claimId,
+        amount: payment.amount,
+        recipientWallet: payment.recipientWallet,
+        txHash: bcResult.txHash,
+      },
+    }).catch(() => {});
 
     // Audit log with real authenticated actor
     db.logAudit({

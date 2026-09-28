@@ -212,6 +212,7 @@ CREATE TABLE IF NOT EXISTS outbox_events (
     status VARCHAR(32) NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'PROCESSING', 'PROCESSED', 'FAILED')),
     retry_count INT NOT NULL DEFAULT 0,
     error_message TEXT,
+    tx_hash VARCHAR(66),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     processed_at TIMESTAMPTZ
 );

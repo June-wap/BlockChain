@@ -141,6 +141,7 @@ export async function seedDatabaseIfEmpty(): Promise<void> {
     evidence: [
       {
         id: "ev-101",
+        claimId: "clm-101",
         fileName: "hospital_invoice_001.pdf",
         fileUrl: "/api/claims/clm-101/evidence/ev-101",
         fileSize: 1024 * 450,
@@ -160,7 +161,7 @@ export async function seedDatabaseIfEmpty(): Promise<void> {
     customerName: "Nguyen Van A",
     amount: 4000,
     status: PaymentStatus.PENDING,
-    method: "SMART_CONTRACT_ESCROW",
+    paymentMethod: "CRYPTO_SMART_CONTRACT",
     recipientWallet: "0x71C8366453AB548A31D08f237B855D282126B39a",
     createdAt: "2026-03-03T14:30:00Z",
   });

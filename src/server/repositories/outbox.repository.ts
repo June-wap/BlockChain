@@ -9,6 +9,7 @@ export interface OutboxEvent {
   status: "PENDING" | "PROCESSING" | "PROCESSED" | "FAILED";
   retryCount: number;
   errorMessage?: string;
+  txHash?: string;
   createdAt: string;
   processedAt?: string;
 }
@@ -47,7 +48,7 @@ export class OutboxRepository {
     const res = await db.query(
       `SELECT id, aggregate_type as "aggregateType", aggregate_id as "aggregateId",
               event_type as "eventType", payload, status, retry_count as "retryCount",
-              error_message as "errorMessage", created_at as "createdAt",
+              error_message as "errorMessage", tx_hash as "txHash", created_at as "createdAt",
               processed_at as "processedAt"
        FROM outbox_events
        WHERE status = 'PENDING'
@@ -65,18 +66,19 @@ export class OutboxRepository {
       status: r.status,
       retryCount: r.retryCount,
       errorMessage: r.errorMessage || undefined,
+      txHash: r.txHash || undefined,
       createdAt: new Date(r.createdAt).toISOString(),
       processedAt: r.processedAt ? new Date(r.processedAt).toISOString() : undefined,
     }));
   }
 
-  public static async markProcessed(id: string, client?: IDatabaseClient): Promise<void> {
+  public static async markProcessed(id: string, txHash?: string, client?: IDatabaseClient): Promise<void> {
     const db = client || dbConnection;
     await db.query(
       `UPDATE outbox_events
-       SET status = 'PROCESSED', processed_at = NOW()
+       SET status = 'PROCESSED', tx_hash = COALESCE($2, tx_hash), processed_at = NOW()
        WHERE id = $1;`,
-      [id]
+      [id, txHash || null]
     );
   }
 

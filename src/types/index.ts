@@ -68,7 +68,7 @@ export enum ClaimStatus {
 
 export interface EvidenceItem {
   id: string;
-  claimId: string;
+  claimId?: string;
   fileName: string;
   fileUrl: string;
   fileHash?: string;
@@ -115,9 +115,11 @@ export interface Payment {
   claimId: string;
   policyId: string;
   customerId: string;
+  customerName?: string;
   amount: number;
   status: PaymentStatus;
-  paymentMethod: "FIAT_BANK_TRANSFER" | "CRYPTO_SMART_CONTRACT";
+  paymentMethod: "FIAT_BANK_TRANSFER" | "CRYPTO_SMART_CONTRACT" | "SMART_CONTRACT_ESCROW" | string;
+  method?: string;
   recipientWallet?: string;
   recipientBankAccount?: string;
   blockchainTxHash?: string;
@@ -158,7 +160,8 @@ export interface PolicyDetail extends Policy {
   policyHolder: string;
   coverages: CoverageItem[];
   deductible: number;
-  termsAndConditions: string;
+  termsAndConditions?: string;
+  createdAt?: string;
 }
 
 // ==========================================
@@ -215,15 +218,18 @@ export interface BlockchainTransaction {
   id: string;
   txHash: string;
   network: string;
-  action: "CLAIM_RECORDED" | "CLAIM_APPROVED" | "CLAIM_REJECTED" | "PAYMENT_DISBURSED";
+  action: "CLAIM_RECORDED" | "CLAIM_SUBMITTED" | "CLAIM_APPROVED" | "CLAIM_REJECTED" | "PAYMENT_DISBURSED" | string;
   claimId?: string;
   paymentId?: string;
   fromAddress: string;
   contractAddress: string;
+  from?: string;
+  to?: string;
   blockNumber: number;
   gasUsed: number;
   status: BlockchainTxStatus;
   confirmationCount: number;
+  confirmations?: number;
   timestamp: string;
   errorMessage?: string;
 }
@@ -239,6 +245,7 @@ export enum AuditAction {
   POLICY_SUSPENDED = "POLICY_SUSPENDED",
   POLICY_CANCELLED = "POLICY_CANCELLED",
   CLAIM_CREATED = "CLAIM_CREATED",
+  CLAIM_UPDATED = "CLAIM_UPDATED",
   CLAIM_VIEWED = "CLAIM_VIEWED",
   CLAIM_REVIEW_STARTED = "CLAIM_REVIEW_STARTED",
   CLAIM_APPROVED = "CLAIM_APPROVED",

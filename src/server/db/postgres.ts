@@ -151,9 +151,9 @@ class DatabaseManager {
       try {
         await client.query("BEGIN");
         const clientAdapter: IDatabaseClient = {
-          query: async (sql, params = []) => {
+          query: async <R = any>(sql: string, params: any[] = []): Promise<QueryResult<R>> => {
             const res = await client.query(sql, params);
-            return { rows: res.rows, rowCount: res.rowCount || 0 };
+            return { rows: res.rows as R[], rowCount: res.rowCount || 0 };
           },
         };
         const result = await callback(clientAdapter);
@@ -169,10 +169,10 @@ class DatabaseManager {
       await this.pgliteInstance.query("BEGIN");
       try {
         const clientAdapter: IDatabaseClient = {
-          query: async (sql, params = []) => {
+          query: async <R = any>(sql: string, params: any[] = []): Promise<QueryResult<R>> => {
             const res = await this.pgliteInstance!.query(sql, params);
             return {
-              rows: res.rows || [],
+              rows: (res.rows || []) as R[],
               rowCount: res.affectedRows || (res.rows ? res.rows.length : 0),
             };
           },

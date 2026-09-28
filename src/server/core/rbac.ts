@@ -3,7 +3,7 @@ import { ForbiddenError, AuthenticationError } from "./errors";
 
 export interface AuthenticatedUser {
   id: string;
-  email: string;
+  email?: string;
   fullName?: string;
   name?: string;
   role: UserRole;
