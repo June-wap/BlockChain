@@ -2,7 +2,8 @@ import { OutboxRepository, OutboxEvent } from "../repositories/outbox.repository
 import { ClaimRepository } from "../repositories/claim.repository";
 import { PaymentRepository } from "../repositories/payment.repository";
 import { BlockchainService } from "../services/blockchain.service";
-import { db } from "../db/store";
+import { dbConnection } from "../db/postgres";
+import { ClaimStatus, PaymentStatus } from "@/types";
 
 export interface OutboxProcessResult {
   processed: number;
@@ -19,17 +20,20 @@ export interface OutboxProcessResult {
 
 export class OutboxWorker {
   /**
-   * Processes a batch of pending events from outbox_events table
+   * Processes a batch of events claimed atomically from outbox_events table
    */
-  public static async processBatch(batchSize: number = 10): Promise<OutboxProcessResult> {
-    const pendingEvents = await OutboxRepository.getPendingEvents(batchSize);
+  public static async processBatch(
+    batchSize: number = 10,
+    workerId: string = `worker_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`
+  ): Promise<OutboxProcessResult> {
+    const claimedEvents = await OutboxRepository.claimNextBatch(batchSize, workerId);
     const summary: OutboxProcessResult = {
       processed: 0,
       failed: 0,
       results: [],
     };
 
-    for (const event of pendingEvents) {
+    for (const event of claimedEvents) {
       try {
         let txHash: string | undefined;
 
@@ -45,21 +49,19 @@ export class OutboxWorker {
               {
                 policyId: event.payload.policyId,
                 requestedAmount: event.payload.requestedAmount,
+                claimantWallet: event.payload.claimantWallet,
               }
             );
 
             txHash = result.txHash;
 
-            // Update Claim record with on-chain txHash
+            // Update Claim record with on-chain txHash in PostgreSQL
             await ClaimRepository.updateBlockchainTx(claimId, txHash).catch(() => {});
-            const memoryClaim = db.getClaims().get(claimId);
-            if (memoryClaim) {
-              memoryClaim.blockchainTxHash = txHash;
-            }
             break;
           }
 
-          case "PAYMENT_DISBURSED": {
+          case "PAYMENT_DISBURSED":
+          case "PAYMENT_DISBURSE_REQUESTED": {
             const paymentId = event.aggregateId;
             const claimId = event.payload.claimId;
             const amount = Number(event.payload.amount || 0);
@@ -75,16 +77,27 @@ export class OutboxWorker {
 
             txHash = result.txHash;
 
-            // Update Payment record in PostgreSQL and memory
-            const payment = await PaymentRepository.findById(paymentId);
-            if (payment) {
-              payment.blockchainTxHash = txHash;
-              await PaymentRepository.update(payment).catch(() => {});
-            }
-            const memoryPayment = db.getPayments().get(paymentId);
-            if (memoryPayment) {
-              memoryPayment.blockchainTxHash = txHash;
-            }
+            // Atomic PostgreSQL transaction: finalize payment and claim status
+            await dbConnection.transaction(async (client) => {
+              const payment = await PaymentRepository.findById(paymentId, client);
+              if (payment) {
+                payment.status = PaymentStatus.SUCCESS;
+                payment.blockchainTxHash = txHash;
+                payment.processedAt = new Date().toISOString();
+                await PaymentRepository.update(payment, client);
+              }
+
+              const claim = await ClaimRepository.findById(claimId, client);
+              if (claim && claim.status !== ClaimStatus.PAID) {
+                await ClaimRepository.updateStatusWithOptimisticLock(
+                  claimId,
+                  ClaimStatus.PAID,
+                  claim.version ?? 1,
+                  { blockchainTxHash: txHash },
+                  client
+                );
+              }
+            }).catch(() => {});
             break;
           }
 
@@ -107,11 +120,11 @@ export class OutboxWorker {
           }
 
           default:
-            // Generic event: mark as processed without blockchain call
+            // Generic event: mark as processed without external dispatch
             break;
         }
 
-        await OutboxRepository.markProcessed(event.id, txHash);
+        await OutboxRepository.recordSuccess(event.id, txHash);
         summary.processed++;
         summary.results.push({
           eventId: event.id,
@@ -122,7 +135,7 @@ export class OutboxWorker {
         });
       } catch (err: any) {
         const errorMsg = err?.message || "Unknown error processing outbox event";
-        await OutboxRepository.markFailed(event.id, errorMsg);
+        await OutboxRepository.recordFailure(event.id, errorMsg);
         summary.failed++;
         summary.results.push({
           eventId: event.id,
