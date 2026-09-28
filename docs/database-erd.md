@@ -162,4 +162,18 @@ erDiagram
         string ip_address
         jsonb metadata
     }
+
+    OUTBOX_EVENTS {
+        string id PK
+        string aggregate_type "CLAIM, PAYMENT"
+        string aggregate_id
+        string event_type "CLAIM_SUBMITTED, CLAIM_APPROVED, CLAIM_REJECTED, PAYMENT_DISBURSED"
+        jsonb payload
+        string status "PENDING, PROCESSING, PROCESSED, FAILED"
+        int retry_count
+        string error_message
+        string tx_hash
+        datetime created_at
+        datetime processed_at
+    }
 ```
