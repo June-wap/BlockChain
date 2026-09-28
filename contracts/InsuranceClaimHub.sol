@@ -171,8 +171,8 @@ contract InsuranceClaimHub is Context, ReentrancyGuard {
         require(isClaimRecorded[claimHash], "Claim not found");
         OnChainClaim storage claim = claims[claimHash];
         require(
-            claim.status == ClaimStatus.Submitted || claim.status == ClaimStatus.UnderReview,
-            "Invalid state for approval: Must be Submitted or UnderReview"
+            claim.status == ClaimStatus.UnderReview,
+            "Invalid state for approval: Must be UnderReview"
         );
         require(approvedAmount > 0, "Approved amount must be > 0");
         require(approvedAmount <= claim.requestedAmount, "Approved amount exceeds requested");
@@ -193,8 +193,8 @@ contract InsuranceClaimHub is Context, ReentrancyGuard {
         require(isClaimRecorded[claimHash], "Claim not found");
         OnChainClaim storage claim = claims[claimHash];
         require(
-            claim.status == ClaimStatus.Submitted || claim.status == ClaimStatus.UnderReview,
-            "Invalid state for rejection"
+            claim.status == ClaimStatus.UnderReview,
+            "Invalid state for rejection: Must be UnderReview"
         );
 
         ClaimStatus oldStatus = claim.status;
