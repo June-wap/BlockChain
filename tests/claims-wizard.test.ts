@@ -1,8 +1,13 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeAll } from "vitest";
 import { ClaimService } from "@/server/services/claim.service";
+import { initDatabase } from "@/server/db/postgres";
 import { ClaimStatus, UserRole } from "@/types";
 
 describe("Claims Wizard Submission & Validation (FE-09, FE-10)", () => {
+  beforeAll(async () => {
+    await initDatabase();
+  });
+
   const customerId = "usr_customer_default";
   const customerName = "Nguyen Van A";
 

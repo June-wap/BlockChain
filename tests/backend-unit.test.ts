@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, beforeAll } from "vitest";
 import { AuthService } from "@/server/services/auth.service";
 import { ClaimService } from "@/server/services/claim.service";
 import { PolicyService } from "@/server/services/policy.service";
@@ -6,10 +6,15 @@ import { BlockchainService } from "@/server/services/blockchain.service";
 import { SecurityUtils } from "@/server/core/security";
 import { ClaimLifecycleEngine } from "@/server/core/lifecycle";
 import { RbacGuard } from "@/server/core/rbac";
-import { db } from "@/server/db/store";
-import { ClaimStatus, PaymentStatus, PolicyStatus, UserRole } from "@/types";
+import { UserRepository } from "@/server/repositories/user.repository";
+import { initDatabase } from "@/server/db/postgres";
+import { ClaimStatus, PaymentStatus, PolicyStatus, UserRole, UserStatus } from "@/types";
 
 describe("Backend Unit Tests (BE-34)", () => {
+  beforeAll(async () => {
+    await initDatabase();
+  });
+
   beforeEach(() => {
     // Clean slate or reset rate limiters
   });
@@ -71,9 +76,9 @@ describe("Backend Unit Tests (BE-34)", () => {
     });
 
     it("should block login when user account is suspended", async () => {
-      const suspendedUser = Array.from(db.getUsers().values()).find((u) => u.email === "customer@example.com");
-      if (suspendedUser) {
-        suspendedUser.status = "SUSPENDED" as any;
+      const user = await UserRepository.findByEmail("customer@example.com");
+      if (user) {
+        await UserRepository.updateStatus(user.id, UserStatus.SUSPENDED);
       }
 
       await expect(
@@ -81,8 +86,8 @@ describe("Backend Unit Tests (BE-34)", () => {
       ).rejects.toThrow(/suspended/i);
 
       // Revert status
-      if (suspendedUser) {
-        suspendedUser.status = "ACTIVE" as any;
+      if (user) {
+        await UserRepository.updateStatus(user.id, UserStatus.ACTIVE);
       }
     });
 

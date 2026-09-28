@@ -1,6 +1,5 @@
 import { describe, it, expect } from "vitest";
 import { BlockchainService } from "@/server/services/blockchain.service";
-import { db } from "@/server/db/store";
 import { PaymentStatus } from "@/types";
 
 describe("Payments & Settlements Lifecycle (FE-13 & FE-19)", () => {

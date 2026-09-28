@@ -1,11 +1,15 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeAll } from "vitest";
 import { PolicyService } from "@/server/services/policy.service";
 import { ClaimService } from "@/server/services/claim.service";
 import { RbacGuard } from "@/server/core/rbac";
-import { db } from "@/server/db/store";
+import { initDatabase } from "@/server/db/postgres";
 import { UserRole } from "@/types";
 
 describe("Backend Integration & Security Tests (BE-35)", () => {
+  beforeAll(async () => {
+    await initDatabase();
+  });
+
   const customerA = {
     id: "usr_customer_default",
     name: "Nguyen Van A",
@@ -42,22 +46,22 @@ describe("Backend Integration & Security Tests (BE-35)", () => {
   };
 
   describe("IDOR Protection (BE-04)", () => {
-    it("should prevent Customer A from viewing Customer B's policy", () => {
+    it("should prevent Customer A from viewing Customer B's policy", async () => {
       // pol-104 belongs to customerB (usr_customer_2)
-      const result = PolicyService.getPolicyById("pol-104", customerA);
+      const result = await PolicyService.getPolicyById("pol-104", customerA);
       expect(result.status).toBe(403);
       expect(result.error).toContain("Forbidden");
     });
 
-    it("should allow Customer B to view their own policy", () => {
-      const result = PolicyService.getPolicyById("pol-104", customerB);
+    it("should allow Customer B to view their own policy", async () => {
+      const result = await PolicyService.getPolicyById("pol-104", customerB);
       expect(result.status).toBe(200);
       expect(result.policy?.id).toBe("pol-104");
     });
 
-    it("should prevent Customer A from viewing Customer B's claim", () => {
+    it("should prevent Customer A from viewing Customer B's claim", async () => {
       // clm-506 belongs to customerB (usr_customer_2)
-      const result = ClaimService.getClaimById("clm-506", customerA);
+      const result = await ClaimService.getClaimById("clm-506", customerA);
       expect(result.status).toBe(403);
       expect(result.error).toContain("Forbidden");
     });

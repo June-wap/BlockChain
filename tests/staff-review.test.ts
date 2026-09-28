@@ -1,9 +1,14 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeAll } from "vitest";
 import { ClaimService } from "@/server/services/claim.service";
+import { PaymentRepository } from "@/server/repositories/payment.repository";
+import { initDatabase } from "@/server/db/postgres";
 import { ClaimStatus, UserRole } from "@/types";
-import { db } from "@/server/db/store";
 
 describe("Staff Underwriting & Determination Flow (FE-18 & FE-19)", () => {
+  beforeAll(async () => {
+    await initDatabase();
+  });
+
   const reviewer = {
     id: "usr_reviewer_1",
     name: "Le Minh Reviewer",
@@ -35,9 +40,9 @@ describe("Staff Underwriting & Determination Flow (FE-18 & FE-19)", () => {
     expect(result.claim.blockchainTxHash).toBeDefined();
     expect(result.txHash).toBeDefined();
 
-    // Verify corresponding payment was generated in PENDING state
-    const payment = Array.from(db.getPayments().values()).find((p) => p.claimId === "clm-501");
-    expect(payment).toBeDefined();
+    // Verify corresponding payment was generated in PENDING state in PostgreSQL
+    const payment = await PaymentRepository.findByClaimId("clm-501");
+    expect(payment).not.toBeNull();
     expect(payment?.amount).toBe(1500);
   });
 

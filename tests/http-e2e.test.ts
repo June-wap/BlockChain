@@ -11,9 +11,9 @@ import { POST as approveClaimRoute } from "@/app/api/staff/claims/[id]/approve/r
 import { POST as disbursePaymentRoute } from "@/app/api/payments/[id]/disburse/route";
 import { OutboxWorker } from "@/server/workers/outbox.worker";
 import { PolicyRepository } from "@/server/repositories/policy.repository";
+import { PaymentRepository } from "@/server/repositories/payment.repository";
 import { JwtService } from "@/server/core/jwt";
 import { ClaimStatus, PaymentStatus, PolicyStatus, UserRole } from "@/types";
-import { db } from "@/server/db/store";
 import crypto from "crypto";
 
 describe("P6 — Complete HTTP E2E Integration Pipeline", () => {
@@ -149,7 +149,6 @@ describe("P6 — Complete HTTP E2E Integration Pipeline", () => {
       status: PolicyStatus.ACTIVE,
       coverages: [],
     };
-    db.getPolicies().set(policyId, policyData);
     await PolicyRepository.create(policyData);
 
     const req = new NextRequest("http://localhost:3000/api/claims", {
@@ -249,7 +248,7 @@ describe("P6 — Complete HTTP E2E Integration Pipeline", () => {
     expect(workerStats.failed).toBe(0);
 
     // Step 9: Finance role disburses payment on-chain
-    const payment = Array.from(db.getPayments().values()).find((p) => p.claimId === claimId);
+    const payment = await PaymentRepository.findByClaimId(claimId);
     expect(payment).toBeDefined();
 
     const disburseReq = new NextRequest(

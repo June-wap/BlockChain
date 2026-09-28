@@ -1,13 +1,18 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach } from "vitest";
 import { AuthService } from "@/server/services/auth.service";
 import { JwtService } from "@/server/core/jwt";
 import { SecurityUtils } from "@/server/core/security";
 import { RbacGuard } from "@/server/core/rbac";
-import { db } from "@/server/db/store";
+import { UserRepository } from "@/server/repositories/user.repository";
+import { initDatabase } from "@/server/db/postgres";
 import { UserRole, UserStatus } from "@/types";
 import * as jose from "jose";
 
 describe("P0 - Authentication & Authorization Security Tests", () => {
+  beforeAll(async () => {
+    await initDatabase();
+  });
+
   const JWT_SECRET = new TextEncoder().encode(
     process.env.JWT_SECRET ||
     "antigravity-insurance-claim-processing-system-production-secret-key-32-chars-min!"
@@ -46,9 +51,9 @@ describe("P0 - Authentication & Authorization Security Tests", () => {
   it("P0.9.3: Suspended account cannot log in and resolveUser returns null", async () => {
     // Create suspended user
     const suspendedId = `usr_suspended_${Date.now()}`;
-    db.getUsers().set(suspendedId, {
+    await UserRepository.create({
       id: suspendedId,
-      email: "suspended@insurance.com",
+      email: `suspended_${Date.now()}@insurance.com`,
       fullName: "Suspended User",
       role: UserRole.CUSTOMER,
       status: UserStatus.SUSPENDED,
@@ -56,15 +61,17 @@ describe("P0 - Authentication & Authorization Security Tests", () => {
       passwordHash: SecurityUtils.hashPassword("password123"),
     });
 
+    const suspendedUser = await UserRepository.findById(suspendedId);
+
     // Login must fail
     await expect(
-      AuthService.login("suspended@insurance.com", "password123")
+      AuthService.login(suspendedUser!.email, "password123")
     ).rejects.toThrow(/suspended/i);
 
     // Even if a signed token existed for this user, resolveUser must reject it
     const token = await JwtService.signToken({
       userId: suspendedId,
-      email: "suspended@insurance.com",
+      email: suspendedUser!.email,
       role: UserRole.CUSTOMER,
       fullName: "Suspended User",
     });

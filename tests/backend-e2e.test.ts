@@ -1,12 +1,19 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeAll } from "vitest";
 import { AuthService } from "@/server/services/auth.service";
 import { PolicyService } from "@/server/services/policy.service";
 import { ClaimService } from "@/server/services/claim.service";
 import { BlockchainService } from "@/server/services/blockchain.service";
-import { db } from "@/server/db/store";
+import { PaymentRepository } from "@/server/repositories/payment.repository";
+import { ClaimRepository } from "@/server/repositories/claim.repository";
+import { PolicyRepository } from "@/server/repositories/policy.repository";
+import { initDatabase } from "@/server/db/postgres";
 import { ClaimStatus, PaymentStatus, UserRole } from "@/types";
 
 describe("Backend End-to-End Flow Tests (BE-37)", () => {
+  beforeAll(async () => {
+    await initDatabase();
+  });
+
   const reviewer = {
     id: "usr_reviewer_1",
     name: "Le Minh Reviewer",
@@ -37,11 +44,11 @@ describe("Backend End-to-End Flow Tests (BE-37)", () => {
     expect(loginResult.token).toBeDefined();
     expect(loginResult.user.email).toBe(uniqueEmail);
 
-    // 3. Assign an active policy to this new customer
+    // 3. Admin / System issues an active insurance policy to this customer
     const policyId = `pol-e2e-${Date.now()}`;
-    db.getPolicies().set(policyId, {
+    await PolicyRepository.create({
       id: policyId,
-      policyNumber: `POL-HLTH-${Date.now()}`,
+      policyNumber: `POL-HLTH-2026-${Math.floor(1000 + Math.random() * 9000)}`,
       customerId: regResult.user.id,
       customerName: regResult.user.fullName,
       policyHolder: regResult.user.fullName,
@@ -56,7 +63,7 @@ describe("Backend End-to-End Flow Tests (BE-37)", () => {
     });
 
     // Verify customer can retrieve their policy
-    const customerPolicies = PolicyService.getCustomerPolicies(regResult.user.id);
+    const customerPolicies = await PolicyService.getCustomerPolicies(regResult.user.id);
     expect(customerPolicies.total).toBe(1);
     expect(customerPolicies.policies[0].id).toBe(policyId);
 
@@ -98,9 +105,9 @@ describe("Backend End-to-End Flow Tests (BE-37)", () => {
     expect(approval.claim.approvedAmount).toBe(2500);
     expect(approval.txHash).toBeDefined();
 
-    // 6. Verify corresponding pending payment was created in database
-    const payment = Array.from(db.getPayments().values()).find((p) => p.claimId === claimId);
-    expect(payment).toBeDefined();
+    // 6. Verify corresponding pending payment was created in PostgreSQL
+    const payment = await PaymentRepository.findByClaimId(claimId);
+    expect(payment).not.toBeNull();
     expect(payment?.amount).toBe(2500);
     expect(payment?.status).toBe(PaymentStatus.PENDING);
 
@@ -115,16 +122,19 @@ describe("Backend End-to-End Flow Tests (BE-37)", () => {
     payment!.status = PaymentStatus.SUCCESS;
     payment!.blockchainTxHash = bcDisburseResult.txHash;
     payment!.processedAt = new Date().toISOString();
-    db.getPayments().set(payment!.id, payment!);
+    await PaymentRepository.update(payment!);
 
     // Claim transitions to PAID
-    const finalizedClaim = db.getClaims().get(claimId)!;
-    finalizedClaim.status = ClaimStatus.PAID;
-    finalizedClaim.blockchainTxHash = bcDisburseResult.txHash;
-    db.getClaims().set(claimId, finalizedClaim);
+    const currentClaim = (await ClaimRepository.findById(claimId))!;
+    await ClaimRepository.updateStatusWithOptimisticLock(
+      claimId,
+      ClaimStatus.PAID,
+      currentClaim.version,
+      { blockchainTxHash: bcDisburseResult.txHash }
+    );
 
     // 8. Customer reads final state
-    const customerClaimView = ClaimService.getClaimById(claimId, {
+    const customerClaimView = await ClaimService.getClaimById(claimId, {
       id: regResult.user.id,
       role: UserRole.CUSTOMER,
     });
@@ -163,16 +173,16 @@ describe("Backend End-to-End Flow Tests (BE-37)", () => {
     expect(rejectedClaim.reviewNotes).toContain(rejectionReason);
 
     // 3. Customer reads rejected claim and reason
-    const customerView = ClaimService.getClaimById(claimId, {
+    const customerView = await ClaimService.getClaimById(claimId, {
       id: "usr_customer_default",
       role: UserRole.CUSTOMER,
     });
     expect(customerView.claim?.status).toBe(ClaimStatus.REJECTED);
     expect(customerView.claim?.reviewNotes).toContain(rejectionReason);
 
-    // 4. Verify ZERO payment was created for this claim
-    const payment = Array.from(db.getPayments().values()).find((p) => p.claimId === claimId);
-    expect(payment).toBeUndefined();
+    // 4. Verify ZERO payment was created for this claim in PostgreSQL
+    const payment = await PaymentRepository.findByClaimId(claimId);
+    expect(payment).toBeNull();
   });
 
   it("Flow 3: Blockchain Telemetry handles degraded state without crashing", () => {
