@@ -46,8 +46,8 @@ function LoginForm() {
       }
 
       const role = json.data.user.role;
-      // Sync auth context
-      await login(email, role);
+      // Sync auth context with verified user and signed JWT
+      await login(json.data.user, json.data.token);
 
       // Backend role determines routing
       if (redirectUrl) {

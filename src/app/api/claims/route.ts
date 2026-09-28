@@ -1,17 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { ClaimService, CreateClaimInput } from "@/server/services/claim.service";
-import { AuthService } from "@/server/services/auth.service";
 import { db } from "@/server/db/store";
 import { handleApiError, AuthenticationError, ForbiddenError } from "@/server/core/errors";
 import { UserRole } from "@/types";
+import { getAuthenticatedUser } from "@/server/core/auth-extractor";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(request: NextRequest) {
   try {
-    const token = request.cookies.get("auth_token")?.value;
-    const roleCookie = request.cookies.get("auth_role")?.value;
-    const user = AuthService.resolveUser(token, roleCookie);
+    const user = await getAuthenticatedUser(request);
 
     if (!user) {
       throw new AuthenticationError("Authentication required.");
@@ -78,9 +76,7 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
-    const token = request.cookies.get("auth_token")?.value;
-    const roleCookie = request.cookies.get("auth_role")?.value;
-    const user = AuthService.resolveUser(token, roleCookie);
+    const user = await getAuthenticatedUser(request);
 
     if (!user) {
       throw new AuthenticationError("Authentication required to submit claims.");

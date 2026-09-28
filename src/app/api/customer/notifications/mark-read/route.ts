@@ -1,15 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/server/db/store";
-import { AuthService } from "@/server/services/auth.service";
 import { handleApiError, AuthenticationError, ValidationError } from "@/server/core/errors";
+import { getAuthenticatedUser } from "@/server/core/auth-extractor";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(request: NextRequest) {
   try {
-    const token = request.cookies.get("auth_token")?.value;
-    const roleCookie = request.cookies.get("auth_role")?.value;
-    const user = AuthService.resolveUser(token, roleCookie);
+    const user = await getAuthenticatedUser(request);
 
     if (!user) {
       throw new AuthenticationError("Authentication required.");

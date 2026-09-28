@@ -46,7 +46,7 @@ export default function RegisterPage() {
         throw new Error(json.error || "Registration failed.");
       }
 
-      await login(email, UserRole.CUSTOMER);
+      await login(json.data.user, json.data.token);
       router.push("/customer/dashboard");
     } catch (err: any) {
       setErrorMessage(err.message || "Failed to create account. Please try again.");

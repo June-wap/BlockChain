@@ -1,16 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/server/db/store";
-import { AuthService } from "@/server/services/auth.service";
 import { RbacGuard } from "@/server/core/rbac";
 import { handleApiError, AuthenticationError } from "@/server/core/errors";
+import { getAuthenticatedUser } from "@/server/core/auth-extractor";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(request: NextRequest) {
   try {
-    const token = request.cookies.get("auth_token")?.value;
-    const roleCookie = request.cookies.get("auth_role")?.value;
-    const adminUser = AuthService.resolveUser(token, roleCookie);
+    const adminUser = await getAuthenticatedUser(request);
 
     if (!adminUser) {
       throw new AuthenticationError("Admin authentication required.");

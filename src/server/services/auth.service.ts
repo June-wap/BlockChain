@@ -1,6 +1,7 @@
 import { db } from "../db/store";
 import { AuditAction, User, UserRole, UserStatus } from "@/types";
 import { SecurityUtils, authRateLimiter } from "../core/security";
+import { JwtService } from "../core/jwt";
 import {
   AuthenticationError,
   ConflictError,
@@ -108,7 +109,12 @@ export class AuthService {
       metadata: { action: "REGISTER" },
     });
 
-    const token = `jwt_${userId}_${Date.now()}`;
+    const token = await JwtService.signToken({
+      userId,
+      email: normalizedEmail,
+      role: UserRole.CUSTOMER,
+      fullName: newUser.fullName,
+    });
     const { passwordHash: _, ...safeUser } = newUser;
 
     return {
@@ -156,7 +162,12 @@ export class AuthService {
     // Reset rate limiter on successful authentication
     authRateLimiter.reset(email);
 
-    const token = `jwt_${userEntry.id}_${Date.now()}`;
+    const token = await JwtService.signToken({
+      userId: userEntry.id,
+      email: userEntry.email,
+      role: userEntry.role,
+      fullName: userEntry.fullName,
+    });
     const { passwordHash: _, ...safeUser } = userEntry;
 
     // Log audit
@@ -178,29 +189,29 @@ export class AuthService {
   }
 
   /**
-   * Resolve user from session token or cookies
+   * Resolve user from cryptographically verified session token.
+   * NO fallback roles or unverified sources allowed.
    */
-  public static resolveUser(token?: string, fallbackRole?: string): User | null {
-    if (token) {
-      const parts = token.split("_");
-      const userId = parts[1];
-      if (userId) {
-        const u = db.getUsers().get(userId);
-        if (u) {
-          const { passwordHash: _, ...safe } = u;
-          return safe;
-        }
-      }
+  public static async resolveUser(token?: string): Promise<User | null> {
+    if (!token || typeof token !== "string") {
+      return null;
     }
 
-    if (fallbackRole) {
-      const defaultUser = Array.from(db.getUsers().values()).find((u) => u.role === fallbackRole);
-      if (defaultUser) {
-        const { passwordHash: _, ...safe } = defaultUser;
-        return safe;
-      }
+    const payload = await JwtService.verifyToken(token);
+    if (!payload || !payload.userId) {
+      return null;
     }
 
-    return null;
+    const userEntry = db.getUsers().get(payload.userId);
+    if (!userEntry) {
+      return null;
+    }
+
+    if (userEntry.status === UserStatus.SUSPENDED) {
+      return null;
+    }
+
+    const { passwordHash: _, ...safeUser } = userEntry;
+    return safeUser;
   }
 }

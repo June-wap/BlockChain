@@ -52,7 +52,8 @@ class InDatabaseStore {
   }
 
   private seed() {
-    // 1. Seed Users
+    // 1. Seed Users with real PBKDF2 password hashes (password: "password123")
+    const demoPasswordHash = SecurityUtils.hashPassword("password123");
     const users: (User & { passwordHash: string; status: UserStatus })[] = [
       {
         id: "usr_customer_default",
@@ -63,7 +64,18 @@ class InDatabaseStore {
         walletAddress: "0x71C8366453AB548A31D08f237B855D282126B39a",
         status: UserStatus.ACTIVE,
         createdAt: "2026-01-01T00:00:00Z",
-        passwordHash: "pbkdf2$10000$mockhashedpassword$secure",
+        passwordHash: demoPasswordHash,
+      },
+      {
+        id: "usr_customer_insurance",
+        email: "customer@insurance.com",
+        fullName: "Nguyen Van A",
+        role: UserRole.CUSTOMER,
+        phoneNumber: "+84 912 345 678",
+        walletAddress: "0x71C8366453AB548A31D08f237B855D282126B39a",
+        status: UserStatus.ACTIVE,
+        createdAt: "2026-01-01T00:00:00Z",
+        passwordHash: demoPasswordHash,
       },
       {
         id: "usr_customer_2",
@@ -74,7 +86,7 @@ class InDatabaseStore {
         walletAddress: "0x2B420C7bE753d0e2e283B4628d05541eE5540356",
         status: UserStatus.ACTIVE,
         createdAt: "2026-01-15T00:00:00Z",
-        passwordHash: "pbkdf2$10000$mockhashedpassword$secure",
+        passwordHash: demoPasswordHash,
       },
       {
         id: "usr_reviewer_1",
@@ -84,7 +96,7 @@ class InDatabaseStore {
         phoneNumber: "+84 903 111 222",
         status: UserStatus.ACTIVE,
         createdAt: "2025-11-01T00:00:00Z",
-        passwordHash: "pbkdf2$10000$mockhashedpassword$secure",
+        passwordHash: demoPasswordHash,
       },
       {
         id: "usr_finance_1",
@@ -94,7 +106,7 @@ class InDatabaseStore {
         phoneNumber: "+84 905 333 444",
         status: UserStatus.ACTIVE,
         createdAt: "2025-11-01T00:00:00Z",
-        passwordHash: "pbkdf2$10000$mockhashedpassword$secure",
+        passwordHash: demoPasswordHash,
       },
       {
         id: "usr_admin_1",
@@ -104,7 +116,7 @@ class InDatabaseStore {
         phoneNumber: "+84 909 999 888",
         status: UserStatus.ACTIVE,
         createdAt: "2025-01-01T00:00:00Z",
-        passwordHash: "pbkdf2$10000$mockhashedpassword$secure",
+        passwordHash: demoPasswordHash,
       },
     ];
 

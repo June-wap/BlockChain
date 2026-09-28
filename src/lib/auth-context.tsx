@@ -87,41 +87,41 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
-  const login = async (email: string, requestedRole?: UserRole) => {
+  const login = async (userOrEmail: User | string, tokenOrRole?: string | UserRole) => {
     setIsLoading(true);
-    // Find matching demo user or create user object
-    const demo = DEMO_USERS.find(
-      (u) =>
-        u.email.toLowerCase() === email.toLowerCase() ||
-        (requestedRole && u.role === requestedRole)
-    );
+    try {
+      if (typeof userOrEmail === "object" && userOrEmail !== null && typeof tokenOrRole === "string") {
+        setUser(userOrEmail);
+        setToken(tokenOrRole);
+        localStorage.setItem(STORAGE_KEY_USER, JSON.stringify(userOrEmail));
+        localStorage.setItem(STORAGE_KEY_TOKEN, tokenOrRole);
+        return;
+      }
 
-    const targetRole = requestedRole || demo?.role || UserRole.CUSTOMER;
-    const targetName = demo?.name || email.split("@")[0] || "User";
-
-    const newUser: User = {
-      id: `usr_${Date.now()}`,
-      email: email || `${targetRole.toLowerCase()}@insurance.com`,
-      fullName: targetName,
-      role: targetRole,
-      walletAddress: "0x71C...B39a",
-      createdAt: new Date().toISOString(),
-    };
-
-    const mockJwt = `mock_jwt_token_${newUser.id}_${Date.now()}`;
-
-    setUser(newUser);
-    setToken(mockJwt);
-
-    localStorage.setItem(STORAGE_KEY_USER, JSON.stringify(newUser));
-    localStorage.setItem(STORAGE_KEY_TOKEN, mockJwt);
-    setCookie("auth_role", targetRole, 7);
-    setCookie("auth_token", mockJwt, 7);
-
-    setIsLoading(false);
+      const email = typeof userOrEmail === "string" ? userOrEmail : userOrEmail?.email;
+      const res = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password: "password123" }),
+      });
+      const json = await res.json();
+      if (json.success && json.data) {
+        setUser(json.data.user);
+        setToken(json.data.token);
+        localStorage.setItem(STORAGE_KEY_USER, JSON.stringify(json.data.user));
+        localStorage.setItem(STORAGE_KEY_TOKEN, json.data.token);
+      }
+    } catch (e) {
+      console.error("Auth login sync error:", e);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
-  const logout = () => {
+  const logout = async () => {
+    try {
+      await fetch("/api/auth/logout", { method: "POST" });
+    } catch {}
     setUser(null);
     setToken(null);
     localStorage.removeItem(STORAGE_KEY_USER);
@@ -131,23 +131,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     router.push("/login");
   };
 
-  const switchRole = (newRole: UserRole) => {
+  const switchRole = async (newRole: UserRole) => {
     const demo = DEMO_USERS.find((u) => u.role === newRole);
-    const updatedUser: User = {
-      id: user?.id || `usr_${Date.now()}`,
-      email: demo?.email || `${newRole.toLowerCase()}@insurance.com`,
-      fullName: demo?.name || `Demo ${newRole}`,
-      role: newRole,
-      walletAddress: "0x71C...B39a",
-      createdAt: user?.createdAt || new Date().toISOString(),
-    };
-
-    setUser(updatedUser);
-    localStorage.setItem(STORAGE_KEY_USER, JSON.stringify(updatedUser));
-    setCookie("auth_role", newRole, 7);
-
-    const targetDash = getDefaultDashboardForRole(newRole);
-    router.push(targetDash);
+    if (demo) {
+      await login(demo.email, newRole);
+      const targetDash = getDefaultDashboardForRole(newRole);
+      router.push(targetDash);
+    }
   };
 
   return (

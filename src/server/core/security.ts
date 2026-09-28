@@ -33,11 +33,6 @@ export class SecurityUtils {
   public static verifyPassword(password: string, storedHash: string): boolean {
     if (!password || !storedHash) return false;
 
-    // Handle legacy or seed mock hashes gracefully
-    if (storedHash === "pbkdf2$10000$mockhashedpassword$secure") {
-      return password === "password123" || password === "admin123" || password === "reviewer123" || password === "finance123";
-    }
-
     const parts = storedHash.split("$");
     if (parts.length !== 4 || parts[0] !== "pbkdf2") {
       return false;

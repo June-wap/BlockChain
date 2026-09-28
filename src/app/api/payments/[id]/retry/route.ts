@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/server/db/store";
 import { BlockchainService } from "@/server/services/blockchain.service";
 import { AuditAction, PaymentStatus, UserRole } from "@/types";
+import { getAuthenticatedUser } from "@/server/core/auth-extractor";
+import { RbacGuard } from "@/server/core/rbac";
 
 export const dynamic = "force-dynamic";
 
@@ -10,8 +12,17 @@ export async function POST(
   { params }: { params: { id: string } }
 ) {
   try {
-    const role = request.cookies.get("auth_role")?.value as UserRole;
-    if (role !== UserRole.FINANCE && role !== UserRole.ADMIN) {
+    const user = await getAuthenticatedUser(request);
+    if (!user) {
+      return NextResponse.json(
+        { success: false, error: "Unauthorized: Valid authentication session required." },
+        { status: 401 }
+      );
+    }
+
+    try {
+      RbacGuard.assertCanManagePayments(user);
+    } catch {
       return NextResponse.json(
         { success: false, error: "Forbidden: Only FINANCE or ADMIN roles can retry payments." },
         { status: 403 }
@@ -51,9 +62,9 @@ export async function POST(
     db.getPayments().set(payment.id, payment);
 
     db.logAudit({
-      actorId: "usr_finance_1",
-      actorName: "Pham Thi Finance",
-      role: UserRole.FINANCE,
+      actorId: user.id,
+      actorName: user.fullName,
+      role: user.role,
       action: AuditAction.PAYMENT_RETRIED,
       entityType: "PAYMENT",
       entityId: payment.id,

@@ -1,37 +1,43 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
+import { JwtService } from "@/server/core/jwt";
 
-export function middleware(request: NextRequest) {
+export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
-  // Read cookies set by auth context
-  const authRole = request.cookies.get("auth_role")?.value;
+  // Extract auth_token from cookies
   const authToken = request.cookies.get("auth_token")?.value;
-  const isAuthenticated = Boolean(authToken && authRole);
+  const verifiedPayload = authToken ? await JwtService.verifyToken(authToken) : null;
+  const isAuthenticated = Boolean(verifiedPayload);
+  const userRole = verifiedPayload?.role;
 
-  // 1. If user is already authenticated and visits login/register, redirect to dashboard
+  // 1. If user is already authenticated and visits login/register, redirect to their role-specific dashboard
   if (isAuthenticated && (pathname === "/login" || pathname === "/register")) {
-    if (authRole === "CUSTOMER") {
+    if (userRole === "CUSTOMER") {
       return NextResponse.redirect(new URL("/customer/dashboard", request.url));
     }
-    if (authRole === "CLAIM_REVIEWER" || authRole === "FINANCE") {
+    if (userRole === "CLAIM_REVIEWER" || userRole === "FINANCE") {
       return NextResponse.redirect(new URL("/staff/dashboard", request.url));
     }
-    if (authRole === "ADMIN") {
+    if (userRole === "ADMIN") {
       return NextResponse.redirect(new URL("/admin/dashboard", request.url));
     }
   }
 
   // 2. Customer portal protection
   if (pathname.startsWith("/customer")) {
-    if (!isAuthenticated) {
+    if (!isAuthenticated || !userRole) {
       const loginUrl = new URL("/login", request.url);
       loginUrl.searchParams.set("redirect", pathname);
-      return NextResponse.redirect(loginUrl);
+      const res = NextResponse.redirect(loginUrl);
+      if (authToken && !verifiedPayload) {
+        res.cookies.delete("auth_token");
+        res.cookies.delete("auth_role");
+      }
+      return res;
     }
-    if (authRole !== "CUSTOMER") {
-      // Redirect staff or admin to their respective portal
-      if (authRole === "ADMIN") {
+    if (userRole !== "CUSTOMER") {
+      if (userRole === "ADMIN") {
         return NextResponse.redirect(new URL("/admin/dashboard", request.url));
       }
       return NextResponse.redirect(new URL("/staff/dashboard", request.url));
@@ -40,27 +46,36 @@ export function middleware(request: NextRequest) {
 
   // 3. Staff portal protection
   if (pathname.startsWith("/staff")) {
-    if (!isAuthenticated) {
+    if (!isAuthenticated || !userRole) {
       const loginUrl = new URL("/login", request.url);
       loginUrl.searchParams.set("redirect", pathname);
-      return NextResponse.redirect(loginUrl);
+      const res = NextResponse.redirect(loginUrl);
+      if (authToken && !verifiedPayload) {
+        res.cookies.delete("auth_token");
+        res.cookies.delete("auth_role");
+      }
+      return res;
     }
     const staffRoles = ["CLAIM_REVIEWER", "FINANCE", "ADMIN"];
-    if (!staffRoles.includes(authRole || "")) {
-      // Non-staff (e.g. CUSTOMER) gets redirected to their dashboard
+    if (!staffRoles.includes(userRole)) {
       return NextResponse.redirect(new URL("/customer/dashboard", request.url));
     }
   }
 
   // 4. Admin portal protection
   if (pathname.startsWith("/admin")) {
-    if (!isAuthenticated) {
+    if (!isAuthenticated || !userRole) {
       const loginUrl = new URL("/login", request.url);
       loginUrl.searchParams.set("redirect", pathname);
-      return NextResponse.redirect(loginUrl);
+      const res = NextResponse.redirect(loginUrl);
+      if (authToken && !verifiedPayload) {
+        res.cookies.delete("auth_token");
+        res.cookies.delete("auth_role");
+      }
+      return res;
     }
-    if (authRole !== "ADMIN") {
-      if (authRole === "CUSTOMER") {
+    if (userRole !== "ADMIN") {
+      if (userRole === "CUSTOMER") {
         return NextResponse.redirect(new URL("/customer/dashboard", request.url));
       }
       return NextResponse.redirect(new URL("/staff/dashboard", request.url));

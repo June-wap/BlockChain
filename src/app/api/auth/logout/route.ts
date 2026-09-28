@@ -2,12 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { AuthService } from "@/server/services/auth.service";
 import { db } from "@/server/db/store";
 import { AuditAction } from "@/types";
+import { extractAuthToken } from "@/server/core/auth-extractor";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(request: NextRequest) {
-  const token = request.cookies.get("auth_token")?.value;
-  const user = AuthService.resolveUser(token);
+  const token = extractAuthToken(request);
+  const user = await AuthService.resolveUser(token);
 
   if (user) {
     db.logAudit({
@@ -26,8 +27,8 @@ export async function POST(request: NextRequest) {
     message: "Logged out successfully",
   });
 
-  response.cookies.delete("auth_role");
-  response.cookies.delete("auth_token");
+  response.cookies.set("auth_role", "", { path: "/", maxAge: 0 });
+  response.cookies.set("auth_token", "", { path: "/", maxAge: 0, httpOnly: true });
 
   return response;
 }
