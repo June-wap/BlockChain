@@ -89,7 +89,7 @@ CREATE INDEX IF NOT EXISTS idx_claims_reviewer_id ON claims(reviewer_id);
 -- 6. Claim Documents (Object Storage References)
 CREATE TABLE IF NOT EXISTS claim_documents (
     id VARCHAR(64) PRIMARY KEY,
-    claim_id VARCHAR(64) NOT NULL REFERENCES claims(id) ON DELETE CASCADE,
+    claim_id VARCHAR(64) REFERENCES claims(id) ON DELETE CASCADE,
     storage_key VARCHAR(512) NOT NULL,
     original_filename VARCHAR(255) NOT NULL,
     mime_type VARCHAR(128) NOT NULL,

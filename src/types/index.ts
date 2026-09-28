@@ -87,6 +87,8 @@ export interface Claim {
   approvedAmount?: number;
   description: string;
   incidentDate: string;
+  incidentType?: string;
+  location?: string;
   status: ClaimStatus;
   reviewNotes?: string;
   reviewerId?: string;

@@ -38,6 +38,10 @@ export class JwtService {
     return jwt;
   }
 
+  public static async generateToken(payload: TokenPayload): Promise<string> {
+    return this.signToken(payload);
+  }
+
   /**
    * Verifies signature, expiration, issuer, and audience of candidate JWT.
    * Rejects tampered, forged, or expired tokens.

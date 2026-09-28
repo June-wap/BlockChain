@@ -45,6 +45,12 @@ class DatabaseManager {
       if (!fs.existsSync(this.dbDir)) {
         fs.mkdirSync(this.dbDir, { recursive: true });
       }
+      const pidFile = path.join(this.dbDir, "postmaster.pid");
+      if (fs.existsSync(pidFile)) {
+        try {
+          fs.unlinkSync(pidFile);
+        } catch {}
+      }
       this.pgliteInstance = new PGlite(this.dbDir);
     }
 
@@ -199,3 +205,5 @@ class DatabaseManager {
 }
 
 export const dbConnection = DatabaseManager.getInstance();
+export const initDatabase = async () => dbConnection.initialize();
+export const closeDatabase = async () => dbConnection.close();

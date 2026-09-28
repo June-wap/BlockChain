@@ -178,6 +178,8 @@ export class ClaimService {
       requestedAmount: input.requestedAmount,
       description: input.description.trim(),
       incidentDate: input.incidentDate,
+      incidentType: input.incidentType || "GENERAL",
+      location: input.location || "UNKNOWN",
       status: ClaimStatus.SUBMITTED,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
