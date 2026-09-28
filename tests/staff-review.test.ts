@@ -53,6 +53,7 @@ describe("Staff Underwriting & Determination Flow (FE-18 & FE-19)", () => {
     });
 
     // Rejection without reason fails
+    await ClaimService.startReview(testClaim.claim.id, reviewer);
     await expect(
       ClaimService.rejectClaim(testClaim.claim.id, reviewer, "")
     ).rejects.toThrow(/rejection reason is mandatory/);
@@ -76,6 +77,8 @@ describe("Staff Underwriting & Determination Flow (FE-18 & FE-19)", () => {
       requestedAmount: 500,
       description: "Standard medical claim.",
     });
+
+    await ClaimService.startReview(claim.claim.id, reviewer);
 
     await expect(
       ClaimService.approveClaim(claim.claim.id, reviewer, 600) // 600 > 500

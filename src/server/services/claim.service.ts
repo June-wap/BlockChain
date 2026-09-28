@@ -19,7 +19,13 @@ import {
   ForbiddenError,
   NotFoundError,
   BusinessRuleError,
+  ConflictError,
 } from "../core/errors";
+import { ClaimRepository } from "../repositories/claim.repository";
+import { ReviewRepository } from "../repositories/review.repository";
+import { PaymentRepository } from "../repositories/payment.repository";
+import { AuditRepository } from "../repositories/audit.repository";
+import { OutboxRepository } from "../repositories/outbox.repository";
 
 export interface CreateClaimInput {
   policyId: string;
@@ -181,6 +187,16 @@ export class ClaimService {
 
     db.getClaims().set(claimId, newClaim);
 
+    try {
+      await ClaimRepository.create(newClaim);
+      await OutboxRepository.create({
+        aggregateType: "CLAIM",
+        aggregateId: claimId,
+        eventType: "CLAIM_SUBMITTED",
+        payload: { claimId, claimNumber, requestedAmount: input.requestedAmount, policyId: policy.id },
+      });
+    } catch {}
+
     if (input.idempotencyKey) {
       db.getState().idempotencyKeys.set(input.idempotencyKey, claimId);
     }
@@ -209,6 +225,53 @@ export class ClaimService {
     });
 
     return { claim: newClaim };
+  }
+
+  /**
+   * Transition claim from SUBMITTED to UNDER_REVIEW
+   */
+  public static async startReview(
+    claimId: string,
+    reviewer: { id: string; name: string; role: UserRole }
+  ): Promise<Claim> {
+    if (reviewer.role !== UserRole.CLAIM_REVIEWER && reviewer.role !== UserRole.ADMIN) {
+      throw new ForbiddenError("Forbidden: Only authorized claim reviewers or administrators can review claims.");
+    }
+
+    const claim = db.getClaims().get(claimId);
+    if (!claim) {
+      throw new NotFoundError("Claim", claimId);
+    }
+
+    ClaimLifecycleEngine.assertValidClaimTransition(claim.status, ClaimStatus.UNDER_REVIEW);
+
+    const prevVersion = claim.version || 1;
+    claim.status = ClaimStatus.UNDER_REVIEW;
+    claim.reviewerId = reviewer.id;
+    claim.version = prevVersion + 1;
+    claim.updatedAt = new Date().toISOString();
+    db.getClaims().set(claimId, claim);
+
+    try {
+      await ClaimRepository.updateStatusWithOptimisticLock(
+        claimId,
+        ClaimStatus.UNDER_REVIEW,
+        prevVersion,
+        { reviewerId: reviewer.id, reviewNotes: "Under review by staff" }
+      );
+    } catch {}
+
+    db.logAudit({
+      actorId: reviewer.id,
+      actorName: reviewer.name,
+      role: reviewer.role,
+      action: AuditAction.CLAIM_UPDATED,
+      entityType: "CLAIM",
+      entityId: claimId,
+      metadata: { action: "START_REVIEW", newStatus: ClaimStatus.UNDER_REVIEW },
+    });
+
+    return claim;
   }
 
   /**
@@ -280,12 +343,13 @@ export class ClaimService {
     const bcResult = await BlockchainService.recordClaimApproval(claimId, approvedAmount, idempotencyKey);
 
     // 2. Update claim state
+    const prevVersion = claim.version || 1;
     claim.status = ClaimStatus.APPROVED;
     claim.approvedAmount = approvedAmount;
     claim.reviewerId = reviewer.id;
     claim.reviewNotes = notes || "Approved after review of evidence and policy terms.";
     claim.blockchainTxHash = bcResult.txHash;
-    claim.version = (claim.version || 1) + 1;
+    claim.version = prevVersion + 1;
     claim.updatedAt = new Date().toISOString();
     db.getClaims().set(claimId, claim);
 
@@ -317,6 +381,31 @@ export class ClaimService {
       createdAt: new Date().toISOString(),
     };
     db.getPayments().set(paymentId, payment);
+
+    // Persist to PostgreSQL with Optimistic Locking
+    try {
+      await ClaimRepository.updateStatusWithOptimisticLock(
+        claimId,
+        ClaimStatus.APPROVED,
+        expectedVersion !== undefined ? expectedVersion : prevVersion,
+        {
+          approvedAmount,
+          reviewerId: reviewer.id,
+          reviewNotes: claim.reviewNotes,
+          blockchainTxHash: bcResult.txHash,
+        }
+      );
+      await ReviewRepository.create(review);
+      await PaymentRepository.create(payment);
+      await OutboxRepository.create({
+        aggregateType: "CLAIM",
+        aggregateId: claimId,
+        eventType: "CLAIM_APPROVED",
+        payload: { claimId, approvedAmount, txHash: bcResult.txHash },
+      });
+    } catch (err) {
+      if (err instanceof ConflictError) throw err;
+    }
 
     // 5. Audit Log
     db.logAudit({
@@ -375,10 +464,11 @@ export class ClaimService {
     ClaimLifecycleEngine.assertValidClaimTransition(claim.status, ClaimStatus.REJECTED);
 
     // Update claim
+    const prevVersion = claim.version || 1;
     claim.status = ClaimStatus.REJECTED;
     claim.reviewerId = reviewer.id;
     claim.reviewNotes = `Rejection: ${reason}. ${notes || ""}`.trim();
-    claim.version = (claim.version || 1) + 1;
+    claim.version = prevVersion + 1;
     claim.updatedAt = new Date().toISOString();
     db.getClaims().set(claimId, claim);
 
@@ -395,6 +485,27 @@ export class ClaimService {
       createdAt: new Date().toISOString(),
     };
     db.getState().claimReviews.set(reviewId, review);
+
+    try {
+      await ClaimRepository.updateStatusWithOptimisticLock(
+        claimId,
+        ClaimStatus.REJECTED,
+        expectedVersion !== undefined ? expectedVersion : prevVersion,
+        {
+          reviewerId: reviewer.id,
+          reviewNotes: claim.reviewNotes,
+        }
+      );
+      await ReviewRepository.create(review);
+      await OutboxRepository.create({
+        aggregateType: "CLAIM",
+        aggregateId: claimId,
+        eventType: "CLAIM_REJECTED",
+        payload: { claimId, reason, notes },
+      });
+    } catch (err) {
+      if (err instanceof ConflictError) throw err;
+    }
 
     // Audit Log
     db.logAudit({

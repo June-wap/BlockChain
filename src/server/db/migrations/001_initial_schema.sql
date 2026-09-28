@@ -76,6 +76,7 @@ CREATE TABLE IF NOT EXISTS claims (
     reviewer_id VARCHAR(64) REFERENCES users(id) ON DELETE SET NULL,
     review_notes TEXT,
     blockchain_tx_hash VARCHAR(66),
+    version INT NOT NULL DEFAULT 1,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -188,3 +189,45 @@ CREATE INDEX IF NOT EXISTS idx_audit_logs_timestamp ON audit_logs(timestamp DESC
 CREATE INDEX IF NOT EXISTS idx_audit_logs_actor_id ON audit_logs(actor_id);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_entity ON audit_logs(entity_type, entity_id);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs(action);
+
+-- 12. Sessions Table
+CREATE TABLE IF NOT EXISTS sessions (
+    id VARCHAR(64) PRIMARY KEY,
+    user_id VARCHAR(64) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    token_hash VARCHAR(64) NOT NULL,
+    expires_at TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_token_hash ON sessions(token_hash);
+
+-- 13. Transactional Outbox Events Table
+CREATE TABLE IF NOT EXISTS outbox_events (
+    id VARCHAR(64) PRIMARY KEY,
+    aggregate_type VARCHAR(64) NOT NULL,
+    aggregate_id VARCHAR(64) NOT NULL,
+    event_type VARCHAR(64) NOT NULL,
+    payload JSONB NOT NULL,
+    status VARCHAR(32) NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'PROCESSING', 'PROCESSED', 'FAILED')),
+    retry_count INT NOT NULL DEFAULT 0,
+    error_message TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    processed_at TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_outbox_status_created ON outbox_events(status, created_at);
+
+-- 14. Policy History Table
+CREATE TABLE IF NOT EXISTS policy_history (
+    id VARCHAR(64) PRIMARY KEY,
+    policy_id VARCHAR(64) NOT NULL REFERENCES policies(id) ON DELETE CASCADE,
+    action VARCHAR(64) NOT NULL,
+    previous_status VARCHAR(32),
+    new_status VARCHAR(32),
+    changed_by VARCHAR(64) NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_policy_history_policy_id ON policy_history(policy_id);
+

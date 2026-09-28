@@ -6,7 +6,7 @@ export class ClaimLifecycleEngine {
    * Allowed state transitions for insurance claim processing
    */
   private static readonly VALID_TRANSITIONS: Record<ClaimStatus, ClaimStatus[]> = {
-    [ClaimStatus.SUBMITTED]: [ClaimStatus.UNDER_REVIEW, ClaimStatus.APPROVED, ClaimStatus.REJECTED],
+    [ClaimStatus.SUBMITTED]: [ClaimStatus.UNDER_REVIEW],
     [ClaimStatus.UNDER_REVIEW]: [ClaimStatus.APPROVED, ClaimStatus.REJECTED],
     [ClaimStatus.APPROVED]: [ClaimStatus.PAYMENT_PENDING],
     [ClaimStatus.PAYMENT_PENDING]: [ClaimStatus.PAID],

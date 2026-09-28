@@ -83,7 +83,10 @@ describe("Backend End-to-End Flow Tests (BE-37)", () => {
     expect(claimResult.claim.status).toBe(ClaimStatus.SUBMITTED);
     expect(claimResult.claim.evidence).toHaveLength(1);
 
-    // 5. Reviewer reviews and approves the claim
+    // 5. Reviewer begins underwriting and reviews the claim
+    const underReview = await ClaimService.startReview(claimId, reviewer);
+    expect(underReview.status).toBe(ClaimStatus.UNDER_REVIEW);
+
     const approval = await ClaimService.approveClaim(
       claimId,
       reviewer,
@@ -144,7 +147,10 @@ describe("Backend End-to-End Flow Tests (BE-37)", () => {
     const claimId = testClaim.claim.id;
     expect(testClaim.claim.status).toBe(ClaimStatus.SUBMITTED);
 
-    // 2. Reviewer rejects with specific mandatory reason
+    // 2. Reviewer begins underwriting review
+    await ClaimService.startReview(claimId, reviewer);
+
+    // 3. Reviewer rejects with specific mandatory reason
     const rejectionReason = "Elective cosmetic procedures are strictly excluded under Section 4.2 of policy terms.";
     const rejectedClaim = await ClaimService.rejectClaim(
       claimId,

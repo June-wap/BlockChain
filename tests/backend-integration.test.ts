@@ -138,6 +138,8 @@ describe("Backend Integration & Security Tests (BE-35)", () => {
         description: "Standard outpatient consultation and medication.",
       });
 
+      await ClaimService.startReview(claim.claim.id, reviewer as any);
+
       const firstApproval = await ClaimService.approveClaim(
         claim.claim.id,
         reviewer as any,
