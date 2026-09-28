@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { AuthService } from "@/server/services/auth.service";
-import { db } from "@/server/db/store";
+import { AuditRepository } from "@/server/repositories/audit.repository";
 import { AuditAction } from "@/types";
 import { extractAuthToken } from "@/server/core/auth-extractor";
 
@@ -11,7 +11,9 @@ export async function POST(request: NextRequest) {
   const user = await AuthService.resolveUser(token);
 
   if (user) {
-    db.logAudit({
+    await AuditRepository.create({
+      id: `aud-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+      timestamp: new Date().toISOString(),
       actorId: user.id,
       actorName: user.fullName,
       role: user.role,
@@ -19,7 +21,7 @@ export async function POST(request: NextRequest) {
       entityType: "AUTH",
       entityId: user.id,
       ipAddress: request.headers.get("x-forwarded-for") || "127.0.0.1",
-    });
+    }).catch(() => {});
   }
 
   const response = NextResponse.json({

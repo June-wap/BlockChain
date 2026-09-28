@@ -120,7 +120,7 @@ export class PolicyRepository {
         policy.id,
         policy.policyNumber,
         policy.customerId,
-        policy.type,
+        policy.type || (policy as any).insuranceType || "General",
         BigInt(Math.round(policy.coverageAmount)),
         BigInt(Math.round(policy.premiumAmount)),
         BigInt(Math.round(policy.deductible || 0)),
@@ -149,8 +149,35 @@ export class PolicyRepository {
     );
   }
 
-  public static async count(): Promise<number> {
-    const res = await dbConnection.query(`SELECT COUNT(*) as count FROM policies;`);
+  public static async update(policy: PolicyDetail, client?: IDatabaseClient): Promise<void> {
+    const db = client || dbConnection;
+    await db.query(
+      `UPDATE policies
+       SET insurance_type = $1,
+           coverage_amount = $2,
+           premium_amount = $3,
+           deductible = $4,
+           status = $5,
+           start_date = $6,
+           end_date = $7,
+           updated_at = NOW()
+       WHERE id = $8;`,
+      [
+        policy.type,
+        BigInt(Math.round(policy.coverageAmount)),
+        BigInt(Math.round(policy.premiumAmount)),
+        BigInt(Math.round(policy.deductible || 0)),
+        policy.status,
+        policy.startDate,
+        policy.endDate,
+        policy.id,
+      ]
+    );
+  }
+
+  public static async count(client?: IDatabaseClient): Promise<number> {
+    const db = client || dbConnection;
+    const res = await db.query(`SELECT COUNT(*) as count FROM policies;`);
     return parseInt(res.rows[0]?.count || "0", 10);
   }
 

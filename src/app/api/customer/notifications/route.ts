@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { db } from "@/server/db/store";
+import { NotificationRepository } from "@/server/repositories/notification.repository";
 import { handleApiError, AuthenticationError } from "@/server/core/errors";
 import { getAuthenticatedUser } from "@/server/core/auth-extractor";
 
@@ -13,9 +13,7 @@ export async function GET(request: NextRequest) {
       throw new AuthenticationError("Authentication required.");
     }
 
-    const notifs = Array.from(db.getNotifications().values())
-      .filter((n) => n.userId === user.id)
-      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    const notifs = await NotificationRepository.findByUserId(user.id);
 
     return NextResponse.json({
       success: true,

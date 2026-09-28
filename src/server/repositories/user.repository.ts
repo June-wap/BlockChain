@@ -114,7 +114,40 @@ export class UserRepository {
     );
   }
 
-  public static async findAll(filter?: { role?: UserRole; status?: UserStatus; search?: string }): Promise<UserEntity[]> {
+  public static async updateProfile(
+    id: string,
+    updates: { fullName?: string; phoneNumber?: string; walletAddress?: string },
+    client?: IDatabaseClient
+  ): Promise<void> {
+    const db = client || dbConnection;
+    await db.query(
+      `UPDATE users
+       SET full_name = COALESCE($1, full_name),
+           phone = COALESCE($2, phone),
+           wallet_address = COALESCE($3, wallet_address),
+           updated_at = NOW()
+       WHERE id = $4;`,
+      [updates.fullName || null, updates.phoneNumber || null, updates.walletAddress || null, id]
+    );
+  }
+
+  public static async updateRole(id: string, role: UserRole, client?: IDatabaseClient): Promise<void> {
+    const db = client || dbConnection;
+    await db.query(
+      `INSERT INTO roles (id, name, description) 
+       VALUES ($1, $2, $3)
+       ON CONFLICT (id) DO NOTHING;`,
+      [role, role, `${role} system role`]
+    );
+    await db.query(`DELETE FROM user_roles WHERE user_id = $1;`, [id]);
+    await db.query(`INSERT INTO user_roles (user_id, role_id) VALUES ($1, $2);`, [id, role]);
+  }
+
+  public static async findAll(
+    filter?: { role?: UserRole; status?: UserStatus; search?: string },
+    client?: IDatabaseClient
+  ): Promise<UserEntity[]> {
+    const db = client || dbConnection;
     let sql = `
       SELECT u.id, u.email, u.full_name as "fullName", u.phone as "phoneNumber", 
              u.password_hash as "passwordHash", u.wallet_address as "walletAddress", 
@@ -142,7 +175,7 @@ export class UserRepository {
 
     sql += ` ORDER BY u.created_at DESC;`;
 
-    const res = await dbConnection.query(sql, params);
+    const res = await db.query(sql, params);
     return res.rows.map((row) => ({
       id: row.id,
       email: row.email,
@@ -156,8 +189,9 @@ export class UserRepository {
     }));
   }
 
-  public static async count(): Promise<number> {
-    const res = await dbConnection.query(`SELECT COUNT(*) as count FROM users;`);
+  public static async count(client?: IDatabaseClient): Promise<number> {
+    const db = client || dbConnection;
+    const res = await db.query(`SELECT COUNT(*) as count FROM users;`);
     return parseInt(res.rows[0]?.count || "0", 10);
   }
 }

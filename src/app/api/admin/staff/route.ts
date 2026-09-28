@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { db } from "@/server/db/store";
+import { UserRepository } from "@/server/repositories/user.repository";
+import { AuditRepository } from "@/server/repositories/audit.repository";
 import { RbacGuard } from "@/server/core/rbac";
 import { SecurityUtils } from "@/server/core/security";
 import { handleApiError, AuthenticationError, NotFoundError, ValidationError, ConflictError } from "@/server/core/errors";
@@ -18,9 +19,8 @@ export async function GET(request: NextRequest) {
 
     RbacGuard.assertCanAdministerSystem(adminUser);
 
-    const staffUsers = Array.from(db.getUsers().values()).filter(
-      (u) => u.role !== UserRole.CUSTOMER
-    );
+    const allUsers = await UserRepository.findAll();
+    const staffUsers = allUsers.filter((u) => u.role !== UserRole.CUSTOMER);
 
     const safeStaff = staffUsers.map((u) => {
       const { passwordHash: _, ...safe } = u;
@@ -55,16 +55,18 @@ export async function POST(request: NextRequest) {
         throw new ValidationError("Valid staffId and newRole are required.");
       }
 
-      const staff = db.getUsers().get(staffId);
+      const staff = await UserRepository.findById(staffId);
       if (!staff) {
         throw new NotFoundError("Staff member", staffId);
       }
 
       const oldRole = staff.role;
+      await UserRepository.updateRole(staffId, newRole);
       staff.role = newRole;
-      db.getUsers().set(staff.id, staff);
 
-      db.logAudit({
+      await AuditRepository.create({
+        id: `aud-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+        timestamp: new Date().toISOString(),
         actorId: adminUser.id,
         actorName: adminUser.fullName,
         role: UserRole.ADMIN,
@@ -72,7 +74,7 @@ export async function POST(request: NextRequest) {
         entityType: "USER",
         entityId: staff.id,
         metadata: { oldRole, newRole, staffEmail: staff.email },
-      });
+      }).catch(() => {});
 
       const { passwordHash: _, ...safeStaff } = staff;
       return NextResponse.json({
@@ -92,9 +94,7 @@ export async function POST(request: NextRequest) {
     }
 
     const normalizedEmail = email.trim().toLowerCase();
-    const existing = Array.from(db.getUsers().values()).find(
-      (u) => u.email.toLowerCase() === normalizedEmail
-    );
+    const existing = await UserRepository.findByEmail(normalizedEmail);
     if (existing) {
       throw new ConflictError("An account with this email address already exists.");
     }
@@ -107,16 +107,18 @@ export async function POST(request: NextRequest) {
       id: newStaffId,
       email: normalizedEmail,
       fullName: fullName.trim(),
-      phone: phone?.trim(),
+      phoneNumber: phone?.trim(),
       role: role as UserRole,
       status: UserStatus.ACTIVE,
       createdAt: new Date().toISOString(),
       passwordHash,
     };
 
-    db.getUsers().set(newStaffId, newStaff);
+    await UserRepository.create(newStaff);
 
-    db.logAudit({
+    await AuditRepository.create({
+      id: `aud-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+      timestamp: new Date().toISOString(),
       actorId: adminUser.id,
       actorName: adminUser.fullName,
       role: UserRole.ADMIN,
@@ -124,7 +126,7 @@ export async function POST(request: NextRequest) {
       entityType: "USER",
       entityId: newStaffId,
       metadata: { role, email: normalizedEmail },
-    });
+    }).catch(() => {});
 
     const { passwordHash: _, ...safeNewStaff } = newStaff;
     return NextResponse.json(

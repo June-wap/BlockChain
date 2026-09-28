@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { db } from "@/server/db/store";
+import { UserRepository } from "@/server/repositories/user.repository";
+import { AuditRepository } from "@/server/repositories/audit.repository";
 import { RbacGuard } from "@/server/core/rbac";
 import { handleApiError, AuthenticationError, NotFoundError, ValidationError } from "@/server/core/errors";
 import { AuditAction, UserRole, UserStatus } from "@/types";
@@ -27,17 +28,19 @@ export async function POST(
       throw new ValidationError(`Valid status is required (${Object.values(UserStatus).join(", ")}).`);
     }
 
-    const user = db.getUsers().get(params.id);
+    const user = await UserRepository.findById(params.id);
     if (!user) {
       throw new NotFoundError("User", params.id);
     }
 
     const previousStatus = user.status;
-    user.status = status;
-    db.getUsers().set(user.id, user);
+    await UserRepository.updateStatus(user.id, status as UserStatus);
+    user.status = status as UserStatus;
 
     // Audit log account status change
-    db.logAudit({
+    await AuditRepository.create({
+      id: `aud-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+      timestamp: new Date().toISOString(),
       actorId: adminUser.id,
       actorName: adminUser.fullName,
       role: UserRole.ADMIN,
@@ -45,12 +48,11 @@ export async function POST(
       entityType: "USER",
       entityId: user.id,
       metadata: { previousStatus, newStatus: status, reason: reason || "Administrative action" },
-    });
+    }).catch(() => {});
 
-    const { passwordHash: _, ...safeUser } = user;
     return NextResponse.json({
       success: true,
-      data: safeUser,
+      data: user,
       message: `User account status updated to ${status}.`,
     });
   } catch (error) {

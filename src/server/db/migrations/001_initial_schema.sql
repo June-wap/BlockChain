@@ -209,15 +209,21 @@ CREATE TABLE IF NOT EXISTS outbox_events (
     aggregate_id VARCHAR(64) NOT NULL,
     event_type VARCHAR(64) NOT NULL,
     payload JSONB NOT NULL,
-    status VARCHAR(32) NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'PROCESSING', 'PROCESSED', 'FAILED')),
+    status VARCHAR(32) NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'PROCESSING', 'RETRY', 'PROCESSED', 'FAILED', 'DEAD_LETTER')),
     retry_count INT NOT NULL DEFAULT 0,
+    max_retries INT NOT NULL DEFAULT 5,
+    next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    locked_at TIMESTAMPTZ,
+    locked_by VARCHAR(64),
     error_message TEXT,
+    last_error TEXT,
     tx_hash VARCHAR(66),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     processed_at TIMESTAMPTZ
 );
 
 CREATE INDEX IF NOT EXISTS idx_outbox_status_created ON outbox_events(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_outbox_claim ON outbox_events(status, next_attempt_at);
 
 -- 14. Policy History Table
 CREATE TABLE IF NOT EXISTS policy_history (
@@ -232,3 +238,9 @@ CREATE TABLE IF NOT EXISTS policy_history (
 
 CREATE INDEX IF NOT EXISTS idx_policy_history_policy_id ON policy_history(policy_id);
 
+-- 15. Idempotency Keys Table
+CREATE TABLE IF NOT EXISTS idempotency_keys (
+    key VARCHAR(255) PRIMARY KEY,
+    target_id VARCHAR(64) NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);

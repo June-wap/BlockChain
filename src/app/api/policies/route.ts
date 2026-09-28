@@ -24,17 +24,17 @@ export async function GET(request: NextRequest) {
       if (requestedCustomerId && requestedCustomerId !== user.id) {
         throw new ForbiddenError("Forbidden: You cannot access policies belonging to another customer.");
       }
-      const result = PolicyService.getCustomerPolicies(user.id, { status, search });
+      const result = await PolicyService.getCustomerPolicies(user.id, { status, search });
       return NextResponse.json({ success: true, data: result.policies, meta: { total: result.total } });
     }
 
     // Staff or Admin: Can filter by customerId if provided, or retrieve all
     if (requestedCustomerId) {
-      const result = PolicyService.getCustomerPolicies(requestedCustomerId, { status, search });
+      const result = await PolicyService.getCustomerPolicies(requestedCustomerId, { status, search });
       return NextResponse.json({ success: true, data: result.policies, meta: { total: result.total } });
     }
 
-    const result = PolicyService.getAllPolicies({ status, search });
+    const result = await PolicyService.getAllPolicies({ status, search });
     return NextResponse.json({ success: true, data: result.policies, meta: { total: result.total } });
   } catch (error) {
     return handleApiError(error);

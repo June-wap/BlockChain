@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { db } from "@/server/db/store";
+import { ClaimRepository } from "@/server/repositories/claim.repository";
 import { RbacGuard } from "@/server/core/rbac";
 import { handleApiError, AuthenticationError } from "@/server/core/errors";
 import { getAuthenticatedUser } from "@/server/core/auth-extractor";
@@ -17,32 +17,21 @@ export async function GET(request: NextRequest) {
     RbacGuard.assertCanAdministerSystem(adminUser);
 
     const { searchParams } = new URL(request.url);
-    const search = searchParams.get("search")?.toLowerCase().trim() || "";
+    const search = searchParams.get("search")?.toLowerCase().trim() || undefined;
     const status = searchParams.get("status") || "ALL";
     const page = Math.max(1, parseInt(searchParams.get("page") || "1", 10));
     const limit = Math.max(1, Math.min(100, parseInt(searchParams.get("limit") || "20", 10)));
+    const offset = (page - 1) * limit;
 
-    let claims = Array.from(db.getClaims().values());
-
-    if (status && status !== "ALL") {
-      claims = claims.filter((c) => c.status === status);
-    }
-
-    if (search) {
-      claims = claims.filter(
-        (c) =>
-          c.claimNumber.toLowerCase().includes(search) ||
-          c.id.toLowerCase().includes(search) ||
-          c.policyId.toLowerCase().includes(search) ||
-          (c.customerName && c.customerName.toLowerCase().includes(search))
-      );
-    }
-
-    claims.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-
-    const total = claims.length;
-    const startIndex = (page - 1) * limit;
-    const paginatedClaims = claims.slice(startIndex, startIndex + limit);
+    const [paginatedClaims, total] = await Promise.all([
+      ClaimRepository.findAll({
+        status: status !== "ALL" ? status : undefined,
+        search,
+        limit,
+        offset,
+      }),
+      ClaimRepository.count(),
+    ]);
 
     return NextResponse.json({
       success: true,

@@ -1,5 +1,6 @@
-import { db } from "../db/store";
 import { UserRepository } from "../repositories/user.repository";
+import { AuditRepository } from "../repositories/audit.repository";
+import { dbConnection } from "../db/postgres";
 import { AuditAction, User, UserRole, UserStatus } from "@/types";
 import { SecurityUtils, authRateLimiter } from "../core/security";
 import { JwtService } from "../core/jwt";
@@ -55,7 +56,8 @@ export class AuthService {
   }
 
   /**
-   * Register a new user - STRICT: ALWAYS creates CUSTOMER only
+   * Register a new user - STRICT: ALWAYS creates CUSTOMER only.
+   * Atomically persists to PostgreSQL with audit log.
    */
   public static async register(input: RegisterInput): Promise<{ user: User; token: string }> {
     const { fullName, email, password, phone, walletAddress } = input;
@@ -74,63 +76,65 @@ export class AuthService {
 
     const normalizedEmail = email.trim().toLowerCase();
 
-    // Check duplicate email
-    const existing = Array.from(db.getUsers().values()).find(
-      (u) => u.email.toLowerCase() === normalizedEmail
-    );
+    // Check duplicate email against authoritative PostgreSQL
+    const existing = await UserRepository.findByEmail(normalizedEmail);
     if (existing) {
       throw new ConflictError("An account with this email address already exists.");
     }
 
     const userId = `usr_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
     const passwordHash = SecurityUtils.hashPassword(password);
+    const createdAt = new Date().toISOString();
 
-    const newUser = {
+    const newUserRecord = {
       id: userId,
       email: normalizedEmail,
       fullName: fullName.trim(),
-      phone: phone?.trim(),
+      phoneNumber: phone?.trim(),
       walletAddress: walletAddress?.trim(),
       role: UserRole.CUSTOMER, // HARD-CODED: No client role injection permitted
       status: UserStatus.ACTIVE,
-      createdAt: new Date().toISOString(),
+      createdAt,
       passwordHash,
     };
 
-    db.getUsers().set(userId, newUser);
+    // Atomic SQL transaction for user insertion and initial audit log
+    await dbConnection.transaction(async (client) => {
+      await UserRepository.create(newUserRecord, client);
 
-    try {
-      await UserRepository.create({
-        id: userId,
-        email: normalizedEmail,
-        fullName: newUser.fullName,
-        phoneNumber: newUser.phone,
-        passwordHash,
-        walletAddress: newUser.walletAddress,
-        role: UserRole.CUSTOMER,
-        status: UserStatus.ACTIVE,
-        createdAt: newUser.createdAt,
-      });
-    } catch {}
-
-    // Audit log
-    db.logAudit({
-      actorId: userId,
-      actorName: newUser.fullName,
-      role: UserRole.CUSTOMER,
-      action: AuditAction.LOGIN,
-      entityType: "USER",
-      entityId: userId,
-      metadata: { action: "REGISTER" },
+      await AuditRepository.create(
+        {
+          id: `aud_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+          timestamp: createdAt,
+          actorId: userId,
+          actorName: newUserRecord.fullName,
+          role: UserRole.CUSTOMER,
+          action: AuditAction.LOGIN,
+          entityType: "USER",
+          entityId: userId,
+          metadata: { action: "REGISTER" },
+        },
+        client
+      );
     });
 
     const token = await JwtService.signToken({
       userId,
       email: normalizedEmail,
       role: UserRole.CUSTOMER,
-      fullName: newUser.fullName,
+      fullName: newUserRecord.fullName,
     });
-    const { passwordHash: _, ...safeUser } = newUser;
+
+    const safeUser: User = {
+      id: userId,
+      email: normalizedEmail,
+      fullName: newUserRecord.fullName,
+      role: UserRole.CUSTOMER,
+      phoneNumber: newUserRecord.phoneNumber,
+      walletAddress: newUserRecord.walletAddress,
+      status: UserStatus.ACTIVE,
+      createdAt,
+    };
 
     return {
       user: safeUser,
@@ -139,7 +143,7 @@ export class AuthService {
   }
 
   /**
-   * Authenticate user with password and return safe credentials
+   * Authenticate user with password against PostgreSQL and return safe credentials
    */
   public static async login(
     emailInput: string,
@@ -157,9 +161,8 @@ export class AuthService {
       throw new AppError("Too many login attempts. Please try again after 1 minute.", ErrorCode.RATE_LIMIT_EXCEEDED, 429);
     }
 
-    const userEntry = Array.from(db.getUsers().values()).find(
-      (u) => u.email.toLowerCase() === email
-    );
+    // Query authoritative database record
+    const userEntry = await UserRepository.findByEmail(email);
 
     if (!userEntry) {
       throw new AuthenticationError("Invalid email or credentials.");
@@ -183,10 +186,22 @@ export class AuthService {
       role: userEntry.role,
       fullName: userEntry.fullName,
     });
-    const { passwordHash: _, ...safeUser } = userEntry;
 
-    // Log audit
-    db.logAudit({
+    const safeUser: User = {
+      id: userEntry.id,
+      email: userEntry.email,
+      fullName: userEntry.fullName,
+      role: userEntry.role,
+      phoneNumber: userEntry.phoneNumber,
+      walletAddress: userEntry.walletAddress,
+      status: userEntry.status,
+      createdAt: userEntry.createdAt,
+    };
+
+    // Log audit to PostgreSQL
+    await AuditRepository.create({
+      id: `aud_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+      timestamp: new Date().toISOString(),
       actorId: userEntry.id,
       actorName: userEntry.fullName,
       role: userEntry.role,
@@ -194,7 +209,7 @@ export class AuthService {
       entityType: "AUTH",
       entityId: userEntry.id,
       ipAddress,
-    });
+    }).catch(() => {});
 
     return {
       user: safeUser,
@@ -205,7 +220,7 @@ export class AuthService {
 
   /**
    * Resolve user from cryptographically verified session token.
-   * NO fallback roles or unverified sources allowed.
+   * Single source of truth: PostgreSQL dictates active status and current role.
    */
   public static async resolveUser(token?: string): Promise<User | null> {
     if (!token || typeof token !== "string") {
@@ -217,16 +232,26 @@ export class AuthService {
       return null;
     }
 
-    const userEntry = db.getUsers().get(payload.userId);
+    // Always fetch live entity from PostgreSQL
+    const userEntry = await UserRepository.findById(payload.userId);
     if (!userEntry) {
       return null;
     }
 
+    // Suspended accounts immediately lose access
     if (userEntry.status === UserStatus.SUSPENDED) {
       return null;
     }
 
-    const { passwordHash: _, ...safeUser } = userEntry;
-    return safeUser;
+    return {
+      id: userEntry.id,
+      email: userEntry.email,
+      fullName: userEntry.fullName,
+      role: userEntry.role,
+      phoneNumber: userEntry.phoneNumber,
+      walletAddress: userEntry.walletAddress,
+      status: userEntry.status,
+      createdAt: userEntry.createdAt,
+    };
   }
 }

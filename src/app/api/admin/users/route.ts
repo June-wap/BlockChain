@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { db } from "@/server/db/store";
+import { UserRepository } from "@/server/repositories/user.repository";
+import { PolicyRepository } from "@/server/repositories/policy.repository";
+import { ClaimRepository } from "@/server/repositories/claim.repository";
 import { RbacGuard } from "@/server/core/rbac";
 import { handleApiError, AuthenticationError } from "@/server/core/errors";
-import { UserRole } from "@/types";
+import { UserRole, UserStatus } from "@/types";
 import { getAuthenticatedUser } from "@/server/core/auth-extractor";
 
 export const dynamic = "force-dynamic";
@@ -18,34 +20,31 @@ export async function GET(request: NextRequest) {
     RbacGuard.assertCanAdministerSystem(adminUser);
 
     const { searchParams } = new URL(request.url);
-    const search = searchParams.get("search")?.toLowerCase().trim() || "";
+    const search = searchParams.get("search")?.toLowerCase().trim() || undefined;
     const status = searchParams.get("status") || "ALL";
 
-    let users = Array.from(db.getUsers().values()).filter((u) => u.role === UserRole.CUSTOMER);
+    const [allCustomers, policies, claims] = await Promise.all([
+      UserRepository.findAll({
+        role: UserRole.CUSTOMER,
+        status: status !== "ALL" ? (status as UserStatus) : undefined,
+        search,
+      }),
+      PolicyRepository.findAll(),
+      ClaimRepository.findAll(),
+    ]);
 
-    if (status && status !== "ALL") {
-      users = users.filter((u) => u.status === status);
-    }
-
-    if (search) {
-      users = users.filter(
-        (u) =>
-          u.fullName.toLowerCase().includes(search) ||
-          u.email.toLowerCase().includes(search) ||
-          u.id.toLowerCase().includes(search)
-      );
-    }
-
-    const policies = Array.from(db.getPolicies().values());
-    const claims = Array.from(db.getClaims().values());
-
-    const result = users.map((u) => {
-      // NEVER expose password hash
-      const { passwordHash: _, ...safe } = u;
+    const result = allCustomers.map((u) => {
       const userPolicies = policies.filter((p) => p.customerId === u.id);
       const userClaims = claims.filter((c) => c.customerId === u.id);
       return {
-        ...safe,
+        id: u.id,
+        email: u.email,
+        fullName: u.fullName,
+        role: u.role,
+        phoneNumber: u.phoneNumber,
+        walletAddress: u.walletAddress,
+        status: u.status,
+        createdAt: u.createdAt,
         policyCount: userPolicies.length,
         claimCount: userClaims.length,
       };

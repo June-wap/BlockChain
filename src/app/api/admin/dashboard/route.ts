@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { db } from "@/server/db/store";
+import { UserRepository } from "@/server/repositories/user.repository";
+import { PolicyRepository } from "@/server/repositories/policy.repository";
+import { ClaimRepository } from "@/server/repositories/claim.repository";
+import { PaymentRepository } from "@/server/repositories/payment.repository";
+import { AuditRepository } from "@/server/repositories/audit.repository";
 import { BlockchainService } from "@/server/services/blockchain.service";
 import { RbacGuard } from "@/server/core/rbac";
 import { handleApiError, AuthenticationError } from "@/server/core/errors";
@@ -18,10 +22,13 @@ export async function GET(request: NextRequest) {
 
     RbacGuard.assertCanAdministerSystem(adminUser);
 
-    const users = Array.from(db.getUsers().values());
-    const policies = Array.from(db.getPolicies().values());
-    const claims = Array.from(db.getClaims().values());
-    const payments = Array.from(db.getPayments().values());
+    const [users, policies, claims, payments, recentActivity] = await Promise.all([
+      UserRepository.findAll(),
+      PolicyRepository.findAll(),
+      ClaimRepository.findAll(),
+      PaymentRepository.findAll(),
+      AuditRepository.findAll({ limit: 8 }),
+    ]);
 
     // 8 Core KPIs
     const totalCustomers = users.filter((u) => u.role === UserRole.CUSTOMER).length;
@@ -67,7 +74,6 @@ export async function GET(request: NextRequest) {
     ];
 
     const telemetry = BlockchainService.getTelemetry();
-    const recentActivity = db.getAuditLogs().slice(0, 8);
 
     return NextResponse.json({
       success: true,

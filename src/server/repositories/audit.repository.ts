@@ -22,6 +22,21 @@ export class AuditRepository {
     );
   }
 
+  public static async findById(id: string, client?: IDatabaseClient): Promise<AuditLog | null> {
+    const db = client || dbConnection;
+    const res = await db.query(
+      `SELECT id, timestamp, actor_id as "actorId", actor_name as "actorName",
+              role, action, entity_type as "entityType", entity_id as "entityId",
+              ip_address as "ipAddress", metadata
+       FROM audit_logs
+       WHERE id = $1
+       LIMIT 1;`,
+      [id]
+    );
+    if (res.rows.length === 0) return null;
+    return this.mapRow(res.rows[0]);
+  }
+
   public static async findAll(
     options?: { action?: string; entityType?: string; search?: string; limit?: number; offset?: number },
     client?: IDatabaseClient
@@ -64,7 +79,11 @@ export class AuditRepository {
     }
 
     const res = await db.query(sql, params);
-    return res.rows.map((r: any) => ({
+    return res.rows.map(this.mapRow);
+  }
+
+  private static mapRow(r: any): AuditLog {
+    return {
       id: r.id,
       timestamp: new Date(r.timestamp).toISOString(),
       actorId: r.actorId,
@@ -75,7 +94,7 @@ export class AuditRepository {
       entityId: r.entityId,
       ipAddress: r.ipAddress || undefined,
       metadata: typeof r.metadata === "string" ? JSON.parse(r.metadata) : r.metadata || undefined,
-    }));
+    };
   }
 
   public static async count(): Promise<number> {

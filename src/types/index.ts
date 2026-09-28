@@ -12,11 +12,18 @@ export enum UserRole {
   ADMIN = "ADMIN",
 }
 
+export enum UserStatus {
+  ACTIVE = "ACTIVE",
+  SUSPENDED = "SUSPENDED",
+  PENDING = "PENDING",
+}
+
 export interface User {
   id: string;
   email: string;
   fullName: string;
   role: UserRole;
+  status?: UserStatus;
   phoneNumber?: string;
   walletAddress?: string;
   createdAt: string;
@@ -136,15 +143,6 @@ export interface NavItem {
   iconName: string;
   badge?: string | number;
   roles?: UserRole[];
-}
-
-// ==========================================
-// USER STATUS & DETAILS
-// ==========================================
-export enum UserStatus {
-  ACTIVE = "ACTIVE",
-  SUSPENDED = "SUSPENDED",
-  PENDING = "PENDING",
 }
 
 // ==========================================

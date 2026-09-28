@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { db } from "@/server/db/store";
+import { NotificationRepository } from "@/server/repositories/notification.repository";
 import { handleApiError, AuthenticationError, ValidationError } from "@/server/core/errors";
 import { getAuthenticatedUser } from "@/server/core/auth-extractor";
 
@@ -17,20 +17,12 @@ export async function POST(request: NextRequest) {
     const { notificationId, markAll } = body;
 
     if (markAll) {
-      for (const notif of db.getNotifications().values()) {
-        if (notif.userId === user.id) {
-          notif.read = true;
-        }
-      }
+      await NotificationRepository.markAllAsRead(user.id);
       return NextResponse.json({ success: true, message: "All notifications marked as read." });
     }
 
     if (notificationId) {
-      const notif = db.getNotifications().get(notificationId);
-      if (notif && notif.userId === user.id) {
-        notif.read = true;
-        db.getNotifications().set(notif.id, notif);
-      }
+      await NotificationRepository.markAsRead(notificationId, user.id);
       return NextResponse.json({ success: true, message: "Notification marked as read." });
     }
 

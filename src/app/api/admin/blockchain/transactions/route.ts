@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { db } from "@/server/db/store";
+import { BlockchainTransactionRepository } from "@/server/repositories/blockchain-tx.repository";
 import { RbacGuard } from "@/server/core/rbac";
 import { handleApiError, AuthenticationError } from "@/server/core/errors";
 import { getAuthenticatedUser } from "@/server/core/auth-extractor";
@@ -20,23 +20,12 @@ export async function GET(request: NextRequest) {
     const search = searchParams.get("search")?.toLowerCase().trim();
     const page = Math.max(1, parseInt(searchParams.get("page") || "1", 10));
     const limit = Math.max(1, Math.min(100, parseInt(searchParams.get("limit") || "25", 10)));
+    const offset = (page - 1) * limit;
 
-    let txs = Array.from(db.getBlockchainTransactions().values());
-
-    if (search) {
-      txs = txs.filter(
-        (t) =>
-          t.txHash.toLowerCase().includes(search) ||
-          (t.claimId && t.claimId.toLowerCase().includes(search)) ||
-          t.action.toLowerCase().includes(search)
-      );
-    }
-
-    txs.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-
-    const total = txs.length;
-    const startIndex = (page - 1) * limit;
-    const paginatedTxs = txs.slice(startIndex, startIndex + limit);
+    const [paginatedTxs, total] = await Promise.all([
+      BlockchainTransactionRepository.findAll({ search, limit, offset }),
+      BlockchainTransactionRepository.count(),
+    ]);
 
     return NextResponse.json({
       success: true,

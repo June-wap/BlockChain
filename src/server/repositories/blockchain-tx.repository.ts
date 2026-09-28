@@ -101,6 +101,17 @@ export class BlockchainTransactionRepository {
 
   public static async create(tx: BlockchainTransaction, client?: IDatabaseClient): Promise<void> {
     const db = client || dbConnection;
+    let claimId = tx.claimId || null;
+    if (claimId) {
+      const claimCheck = await db.query(`SELECT 1 FROM claims WHERE id = $1 LIMIT 1;`, [claimId]);
+      if (claimCheck.rows.length === 0) claimId = null;
+    }
+    let paymentId = tx.paymentId || null;
+    if (paymentId) {
+      const payCheck = await db.query(`SELECT 1 FROM payments WHERE id = $1 LIMIT 1;`, [paymentId]);
+      if (payCheck.rows.length === 0) paymentId = null;
+    }
+
     await db.query(
       `INSERT INTO blockchain_transactions (
         id, tx_hash, network, action, claim_id, payment_id,
@@ -112,8 +123,8 @@ export class BlockchainTransactionRepository {
         tx.txHash,
         tx.network,
         tx.action,
-        tx.claimId || null,
-        tx.paymentId || null,
+        claimId,
+        paymentId,
         tx.fromAddress || tx.from || "0x0000000000000000000000000000000000000000",
         tx.contractAddress || tx.to || "0x0000000000000000000000000000000000000000",
         BigInt(tx.blockNumber),

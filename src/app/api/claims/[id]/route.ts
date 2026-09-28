@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { ClaimService } from "@/server/services/claim.service";
-import { db } from "@/server/db/store";
+import { PolicyRepository } from "@/server/repositories/policy.repository";
+import { ReviewRepository } from "@/server/repositories/review.repository";
+import { PaymentRepository } from "@/server/repositories/payment.repository";
+import { BlockchainTransactionRepository } from "@/server/repositories/blockchain-tx.repository";
 import { handleApiError, AuthenticationError } from "@/server/core/errors";
 import { getAuthenticatedUser } from "@/server/core/auth-extractor";
 
@@ -17,7 +20,7 @@ export async function GET(
       throw new AuthenticationError("Authentication required.");
     }
 
-    const result = ClaimService.getClaimById(params.id, {
+    const result = await ClaimService.getClaimById(params.id, {
       id: user.id,
       role: user.role,
     });
@@ -30,14 +33,12 @@ export async function GET(
     }
 
     const claim = result.claim!;
-    const policy = db.getPolicies().get(claim.policyId);
-    const review = Array.from(db.getState().claimReviews.values()).find((r) => r.claimId === claim.id);
-    const payment = Array.from(db.getPayments().values()).find((p) => p.claimId === claim.id);
-
-    // Find real blockchain transaction (do not fabricate fake ones)
-    const blockchainTx = Array.from(db.getBlockchainTransactions().values()).find(
-      (tx) => tx.claimId === claim.id
-    );
+    const [policy, review, payment, blockchainTx] = await Promise.all([
+      PolicyRepository.findById(claim.policyId),
+      ReviewRepository.findByClaimId(claim.id),
+      PaymentRepository.findByClaimId(claim.id),
+      BlockchainTransactionRepository.findByClaimId(claim.id),
+    ]);
 
     return NextResponse.json({
       success: true,

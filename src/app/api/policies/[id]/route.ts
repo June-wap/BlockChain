@@ -16,7 +16,7 @@ export async function GET(
       throw new AuthenticationError("Authentication required.");
     }
 
-    const result = PolicyService.getPolicyById(params.id, {
+    const result = await PolicyService.getPolicyById(params.id, {
       id: user.id,
       role: user.role,
     });

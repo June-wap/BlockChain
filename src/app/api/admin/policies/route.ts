@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { db } from "@/server/db/store";
+import { PolicyRepository } from "@/server/repositories/policy.repository";
+import { UserRepository } from "@/server/repositories/user.repository";
+import { AuditRepository } from "@/server/repositories/audit.repository";
 import { RbacGuard } from "@/server/core/rbac";
 import { handleApiError, AuthenticationError, ValidationError, NotFoundError } from "@/server/core/errors";
 import { AuditAction, PolicyDetail, PolicyStatus, UserRole } from "@/types";
@@ -18,23 +20,13 @@ export async function GET(request: NextRequest) {
     RbacGuard.assertCanAdministerSystem(adminUser);
 
     const { searchParams } = new URL(request.url);
-    const search = searchParams.get("search")?.toLowerCase().trim() || "";
+    const search = searchParams.get("search")?.toLowerCase().trim() || undefined;
     const status = searchParams.get("status") || "ALL";
 
-    let policies = Array.from(db.getPolicies().values());
-
-    if (status && status !== "ALL") {
-      policies = policies.filter((p) => p.status === status);
-    }
-
-    if (search) {
-      policies = policies.filter(
-        (p) =>
-          p.policyNumber.toLowerCase().includes(search) ||
-          p.type.toLowerCase().includes(search) ||
-          Boolean(p.customerName && p.customerName.toLowerCase().includes(search))
-      );
-    }
+    const policies = await PolicyRepository.findAll({
+      status: status !== "ALL" ? status : undefined,
+      search,
+    });
 
     return NextResponse.json({
       success: true,
@@ -65,16 +57,18 @@ export async function POST(request: NextRequest) {
         throw new ValidationError("Valid policyId and newStatus are required.");
       }
 
-      const policy = db.getPolicies().get(policyId);
+      const policy = await PolicyRepository.findById(policyId);
       if (!policy) {
         throw new NotFoundError("Policy", policyId);
       }
 
       const previousStatus = policy.status;
+      await PolicyRepository.updateStatus(policyId, newStatus, adminUser.fullName);
       policy.status = newStatus;
-      db.getPolicies().set(policy.id, policy);
 
-      db.logAudit({
+      await AuditRepository.create({
+        id: `aud-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+        timestamp: new Date().toISOString(),
         actorId: adminUser.id,
         actorName: adminUser.fullName,
         role: UserRole.ADMIN,
@@ -82,7 +76,7 @@ export async function POST(request: NextRequest) {
         entityType: "POLICY",
         entityId: policy.id,
         metadata: { previousStatus, newStatus },
-      });
+      }).catch(() => {});
 
       return NextResponse.json({
         success: true,
@@ -96,7 +90,7 @@ export async function POST(request: NextRequest) {
       throw new ValidationError("customerId, type, coverageAmount, premiumAmount, startDate, and endDate are required.");
     }
 
-    const customer = db.getUsers().get(customerId);
+    const customer = await UserRepository.findById(customerId);
     if (!customer) {
       throw new NotFoundError("Customer", customerId);
     }
@@ -123,9 +117,11 @@ export async function POST(request: NextRequest) {
         `Standard policy terms, exclusions, and settlement criteria for ${type}.`,
     };
 
-    db.getPolicies().set(newId, newPolicy);
+    await PolicyRepository.create(newPolicy);
 
-    db.logAudit({
+    await AuditRepository.create({
+      id: `aud-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+      timestamp: new Date().toISOString(),
       actorId: adminUser.id,
       actorName: adminUser.fullName,
       role: UserRole.ADMIN,
@@ -133,7 +129,7 @@ export async function POST(request: NextRequest) {
       entityType: "POLICY",
       entityId: newId,
       metadata: { policyNumber, customerId, coverageAmount },
-    });
+    }).catch(() => {});
 
     return NextResponse.json(
       {

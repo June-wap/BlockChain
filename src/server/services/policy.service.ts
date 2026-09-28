@@ -1,5 +1,7 @@
 import { PolicyDetail, PolicyStatus, UserRole } from "@/types";
-import { db } from "../db/store";
+import { PolicyRepository } from "../repositories/policy.repository";
+import { AuditRepository } from "../repositories/audit.repository";
+import { AuditAction } from "@/types";
 
 export interface PolicyQueryParams {
   status?: string;
@@ -10,32 +12,16 @@ export interface PolicyQueryParams {
 
 export class PolicyService {
   /**
-   * Get policies for a customer with ownership check
+   * Get policies for a customer with ownership check from authoritative PostgreSQL
    */
-  public static getCustomerPolicies(
+  public static async getCustomerPolicies(
     customerId: string,
     params: PolicyQueryParams = {}
-  ): { policies: PolicyDetail[]; total: number } {
-    let policies = Array.from(db.getPolicies().values()).filter(
-      (p) => p.customerId === customerId
-    );
-
-    // Filter by status if specified
-    if (params.status && params.status !== "ALL") {
-      policies = policies.filter(
-        (p) => p.status.toUpperCase() === params.status?.toUpperCase()
-      );
-    }
-
-    // Search by policy number or type
-    if (params.search && params.search.trim() !== "") {
-      const q = params.search.toLowerCase().trim();
-      policies = policies.filter(
-        (p) =>
-          p.policyNumber.toLowerCase().includes(q) ||
-          p.type.toLowerCase().includes(q)
-      );
-    }
+  ): Promise<{ policies: PolicyDetail[]; total: number }> {
+    let policies = await PolicyRepository.findByCustomerId(customerId, {
+      status: params.status,
+      search: params.search,
+    });
 
     return {
       policies,
@@ -44,13 +30,13 @@ export class PolicyService {
   }
 
   /**
-   * Get policy detail by ID with strict ownership check
+   * Get policy detail by ID with strict ownership check from authoritative PostgreSQL
    */
-  public static getPolicyById(
+  public static async getPolicyById(
     policyId: string,
     requestUser: { id: string; role: UserRole }
-  ): { policy?: PolicyDetail; error?: string; status: number } {
-    const policy = db.getPolicies().get(policyId);
+  ): Promise<{ policy?: PolicyDetail; error?: string; status: number }> {
+    const policy = await PolicyRepository.findById(policyId);
     if (!policy) {
       return { error: "Policy not found", status: 404 };
     }
@@ -70,46 +56,37 @@ export class PolicyService {
   }
 
   /**
-   * System-wide policies for Admin
+   * System-wide policies for Admin from authoritative PostgreSQL
    */
-  public static getAllPolicies(params: PolicyQueryParams = {}) {
-    let policies = Array.from(db.getPolicies().values());
-
-    if (params.status && params.status !== "ALL") {
-      policies = policies.filter(
-        (p) => p.status.toUpperCase() === params.status?.toUpperCase()
-      );
-    }
-
-    if (params.search) {
-      const q = params.search.toLowerCase().trim();
-      policies = policies.filter(
-        (p) =>
-          p.policyNumber.toLowerCase().includes(q) ||
-          p.type.toLowerCase().includes(q) ||
-          (p.customerName && p.customerName.toLowerCase().includes(q))
-      );
-    }
+  public static async getAllPolicies(
+    params: PolicyQueryParams = {}
+  ): Promise<{ policies: PolicyDetail[]; total: number }> {
+    const policies = await PolicyRepository.findAll({
+      status: params.status,
+      search: params.search,
+    });
 
     return { policies, total: policies.length };
   }
 
   /**
-   * Update policy status (Admin only)
+   * Update policy status (Admin only) with audit log in PostgreSQL
    */
-  public static updatePolicyStatus(
+  public static async updatePolicyStatus(
     policyId: string,
     newStatus: PolicyStatus,
     adminUser: { id: string; name: string }
-  ) {
-    const policy = db.getPolicies().get(policyId);
+  ): Promise<PolicyDetail> {
+    const policy = await PolicyRepository.findById(policyId);
     if (!policy) throw new Error("Policy not found");
 
     const previousStatus = policy.status;
+    await PolicyRepository.updateStatus(policyId, newStatus, adminUser.name);
     policy.status = newStatus;
-    db.getPolicies().set(policyId, policy);
 
-    db.logAudit({
+    await AuditRepository.create({
+      id: `aud_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+      timestamp: new Date().toISOString(),
       actorId: adminUser.id,
       actorName: adminUser.name,
       role: UserRole.ADMIN,
@@ -120,7 +97,7 @@ export class PolicyService {
       entityType: "POLICY",
       entityId: policyId,
       metadata: { previousStatus, newStatus },
-    });
+    }).catch(() => {});
 
     return policy;
   }
