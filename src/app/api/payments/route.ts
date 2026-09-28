@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { db } from "@/server/db/store";
+import { PaymentRepository } from "@/server/repositories/payment.repository";
 import { handleApiError, AuthenticationError, ForbiddenError } from "@/server/core/errors";
 import { UserRole } from "@/types";
 import { getAuthenticatedUser } from "@/server/core/auth-extractor";
@@ -20,28 +20,26 @@ export async function GET(request: NextRequest) {
     const page = Math.max(1, parseInt(searchParams.get("page") || "1", 10));
     const limit = Math.max(1, Math.min(100, parseInt(searchParams.get("limit") || "20", 10)));
 
-    let payments = Array.from(db.getPayments().values());
+    let targetCustomerId: string | undefined = undefined;
 
     // Customer can only view their own payments
     if (user.role === UserRole.CUSTOMER) {
       if (requestedCustomerId && requestedCustomerId !== user.id) {
         throw new ForbiddenError("Forbidden: You cannot access payment records belonging to another user.");
       }
-      payments = payments.filter((p) => p.customerId === user.id);
+      targetCustomerId = user.id;
     } else if (requestedCustomerId) {
-      // Staff / Admin filtered by customer
-      payments = payments.filter((p) => p.customerId === requestedCustomerId);
+      targetCustomerId = requestedCustomerId;
     }
 
-    if (status && status !== "ALL") {
-      payments = payments.filter((p) => p.status === status);
-    }
+    const allMatching = await PaymentRepository.findAll({
+      customerId: targetCustomerId,
+      status: status !== "ALL" ? status : undefined,
+    });
 
-    payments.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-
-    const total = payments.length;
+    const total = allMatching.length;
     const startIndex = (page - 1) * limit;
-    const paginatedPayments = payments.slice(startIndex, startIndex + limit);
+    const paginatedPayments = allMatching.slice(startIndex, startIndex + limit);
 
     return NextResponse.json({
       success: true,

@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { db } from "@/server/db/store";
+import { ClaimRepository } from "@/server/repositories/claim.repository";
+import { PolicyRepository } from "@/server/repositories/policy.repository";
+import { UserRepository } from "@/server/repositories/user.repository";
 import { RbacGuard } from "@/server/core/rbac";
 import { handleApiError, AuthenticationError, NotFoundError } from "@/server/core/errors";
 import { PolicyStatus, UserRole } from "@/types";
@@ -21,13 +23,16 @@ export async function GET(
     // Role check: Only CLAIM_REVIEWER or ADMIN can access review dossier
     RbacGuard.assertRole(user, [UserRole.CLAIM_REVIEWER, UserRole.ADMIN]);
 
-    const claim = db.getClaims().get(params.id);
+    const claim = await ClaimRepository.findById(params.id);
     if (!claim) {
       throw new NotFoundError("Claim", params.id);
     }
 
-    const policy = db.getPolicies().get(claim.policyId);
-    const customerUser = db.getUsers().get(claim.customerId);
+    const [policy, customerUser, allCustomerClaims] = await Promise.all([
+      PolicyRepository.findById(claim.policyId),
+      UserRepository.findById(claim.customerId),
+      ClaimRepository.findAll({ customerId: claim.customerId }),
+    ]);
 
     // Safe customer profile (never expose passwordHash or internal security keys)
     const customerProfile = customerUser
@@ -43,8 +48,8 @@ export async function GET(
       : null;
 
     // Prior claims by this customer under this policy (for fraud / frequency detection)
-    const priorClaims = Array.from(db.getClaims().values())
-      .filter((c) => c.customerId === claim.customerId && c.id !== claim.id)
+    const priorClaims = allCustomerClaims
+      .filter((c) => c.id !== claim.id)
       .map((c) => ({
         id: c.id,
         claimNumber: c.claimNumber,

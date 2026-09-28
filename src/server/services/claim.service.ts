@@ -10,7 +10,7 @@ import {
   PolicyStatus,
   UserRole,
 } from "@/types";
-import { db } from "../db/store";
+import { dbConnection } from "../db/postgres";
 import { BlockchainService } from "./blockchain.service";
 import { SecurityUtils } from "../core/security";
 import { ClaimLifecycleEngine } from "../core/lifecycle";
@@ -19,13 +19,15 @@ import {
   ForbiddenError,
   NotFoundError,
   BusinessRuleError,
-  ConflictError,
 } from "../core/errors";
+import { PolicyRepository } from "../repositories/policy.repository";
 import { ClaimRepository } from "../repositories/claim.repository";
 import { ReviewRepository } from "../repositories/review.repository";
 import { PaymentRepository } from "../repositories/payment.repository";
+import { NotificationRepository } from "../repositories/notification.repository";
 import { AuditRepository } from "../repositories/audit.repository";
 import { OutboxRepository } from "../repositories/outbox.repository";
+import { IdempotencyRepository } from "../repositories/idempotency.repository";
 
 export interface CreateClaimInput {
   policyId: string;
@@ -46,26 +48,26 @@ export interface CreateClaimInput {
 
 export class ClaimService {
   /**
-   * Submit a new claim with full business validation & idempotency
+   * Submit a new claim with full business validation & atomic persistence in PostgreSQL
    */
   public static async submitClaim(
     customerId: string,
     customerName: string,
     input: CreateClaimInput
   ): Promise<{ claim: Claim; code?: string }> {
-    // 1. Idempotency Check
+    // 0. Idempotency Check
     if (input.idempotencyKey) {
-      const existingClaimId = db.getState().idempotencyKeys.get(input.idempotencyKey);
+      const existingClaimId = await IdempotencyRepository.findTargetId(input.idempotencyKey);
       if (existingClaimId) {
-        const existing = db.getClaims().get(existingClaimId);
-        if (existing) {
-          return { claim: existing };
+        const existingClaim = await ClaimRepository.findById(existingClaimId);
+        if (existingClaim) {
+          return { claim: existingClaim };
         }
       }
     }
 
-    // 2. Policy Validation
-    const policy = db.getPolicies().get(input.policyId);
+    // 1. Policy Validation against authoritative PostgreSQL
+    const policy = await PolicyRepository.findById(input.policyId);
     if (!policy) {
       throw new NotFoundError("Insurance Policy", input.policyId);
     }
@@ -82,7 +84,7 @@ export class ClaimService {
       );
     }
 
-    // 3. Incident Date Validation
+    // 2. Incident Date Validation
     const incDate = new Date(input.incidentDate);
     const today = new Date();
     today.setHours(23, 59, 59, 999);
@@ -103,7 +105,7 @@ export class ClaimService {
       );
     }
 
-    // 4. Requested Amount Validation
+    // 3. Requested Amount Validation
     if (typeof input.requestedAmount !== "number" || input.requestedAmount <= 0) {
       throw new ValidationError("Requested amount must be greater than 0.");
     }
@@ -114,12 +116,12 @@ export class ClaimService {
       );
     }
 
-    // 5. Description Validation
+    // 4. Description Validation
     if (!input.description || input.description.trim().length < 15) {
       throw new ValidationError("Description must contain at least 15 characters detailing the incident.");
     }
 
-    // 6. Evidence Validation & Sanitization (BE-07)
+    // 5. Evidence Validation & Sanitization (BE-07)
     const allowedMimeTypes = [
       "application/pdf",
       "image/jpeg",
@@ -160,13 +162,12 @@ export class ClaimService {
       }
     }
 
-    // 7. Persist Claim
-    const claimId = `clm-${Date.now()}`;
-    const claimNumber = `CLM-2026-${Math.floor(100 + Math.random() * 900)}`;
+    // 6. Build Claim Entity
+    const claimId = `clm-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+    const claimNumber = `CLM-2026-${Date.now().toString().slice(-6)}-${Math.floor(1000 + Math.random() * 9000)}`;
 
     evidenceItems.forEach((ev) => {
       ev.claimId = claimId;
-      db.getState().claimDocuments.set(ev.id, ev);
     });
 
     const newClaim: Claim = {
@@ -187,50 +188,65 @@ export class ClaimService {
       version: 1,
     };
 
-    db.getClaims().set(claimId, newClaim);
+    // 7. Atomic Transaction: Persist Claim, Outbox, Audit, Notification
+    await dbConnection.transaction(async (client) => {
+      await ClaimRepository.create(newClaim, client);
 
-    try {
-      await ClaimRepository.create(newClaim);
-      await OutboxRepository.create({
-        aggregateType: "CLAIM",
-        aggregateId: claimId,
-        eventType: "CLAIM_SUBMITTED",
-        payload: { claimId, claimNumber, requestedAmount: input.requestedAmount, policyId: policy.id },
-      });
-    } catch {}
+      await OutboxRepository.create(
+        {
+          aggregateType: "CLAIM",
+          aggregateId: claimId,
+          eventType: "CLAIM_SUBMITTED",
+          payload: {
+            claimId,
+            claimNumber,
+            requestedAmount: input.requestedAmount,
+            policyId: policy.id,
+            claimantWallet: "0x71C8366453AB548A31D08f237B855D282126B39a",
+          },
+        },
+        client
+      );
 
-    if (input.idempotencyKey) {
-      db.getState().idempotencyKeys.set(input.idempotencyKey, claimId);
-    }
+      await AuditRepository.create(
+        {
+          id: `aud-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+          timestamp: new Date().toISOString(),
+          actorId: customerId,
+          actorName: customerName,
+          role: UserRole.CUSTOMER,
+          action: AuditAction.CLAIM_CREATED,
+          entityType: "CLAIM",
+          entityId: claimId,
+          metadata: { claimNumber, requestedAmount: input.requestedAmount, policyId: policy.id },
+        },
+        client
+      );
 
-    // 8. Audit and Notification
-    db.logAudit({
-      actorId: customerId,
-      actorName: customerName,
-      role: UserRole.CUSTOMER,
-      action: AuditAction.CLAIM_CREATED,
-      entityType: "CLAIM",
-      entityId: claimId,
-      metadata: { claimNumber, requestedAmount: input.requestedAmount, policyId: policy.id },
-    });
+      await NotificationRepository.create(
+        {
+          id: `notif-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+          userId: customerId,
+          title: `Tiếp nhận hồ sơ mới ${claimNumber}`,
+          message: `Yêu cầu bồi thường ${claimNumber} đã được tiếp nhận thành công và sẽ được nhân viên thẩm định xử lý.`,
+          type: NotificationType.CLAIM_SUBMITTED,
+          read: false,
+          linkUrl: `/customer/claims/${claimId}`,
+          createdAt: new Date().toISOString(),
+        },
+        client
+      );
 
-    const notifId = `notif-${Date.now()}`;
-    db.getNotifications().set(notifId, {
-      id: notifId,
-      userId: customerId,
-      title: `Tiếp nhận hồ sơ mới ${claimNumber}`,
-      message: `Yêu cầu bồi thường ${claimNumber} đã được tiếp nhận thành công và sẽ được nhân viên thẩm định xử lý.`,
-      type: NotificationType.CLAIM_SUBMITTED,
-      read: false,
-      linkUrl: `/customer/claims/${claimId}`,
-      createdAt: new Date().toISOString(),
+      if (input.idempotencyKey) {
+        await IdempotencyRepository.recordKey(input.idempotencyKey, claimId, client);
+      }
     });
 
     return { claim: newClaim };
   }
 
   /**
-   * Transition claim from SUBMITTED to UNDER_REVIEW
+   * Transition claim from SUBMITTED to UNDER_REVIEW within single SQL transaction
    */
   public static async startReview(
     claimId: string,
@@ -240,50 +256,50 @@ export class ClaimService {
       throw new ForbiddenError("Forbidden: Only authorized claim reviewers or administrators can review claims.");
     }
 
-    const claim = db.getClaims().get(claimId);
-    if (!claim) {
-      throw new NotFoundError("Claim", claimId);
-    }
+    return await dbConnection.transaction(async (client) => {
+      const claim = await ClaimRepository.findById(claimId, client);
+      if (!claim) {
+        throw new NotFoundError("Claim", claimId);
+      }
 
-    ClaimLifecycleEngine.assertValidClaimTransition(claim.status, ClaimStatus.UNDER_REVIEW);
+      ClaimLifecycleEngine.assertValidClaimTransition(claim.status, ClaimStatus.UNDER_REVIEW);
 
-    const prevVersion = claim.version || 1;
-    claim.status = ClaimStatus.UNDER_REVIEW;
-    claim.reviewerId = reviewer.id;
-    claim.version = prevVersion + 1;
-    claim.updatedAt = new Date().toISOString();
-    db.getClaims().set(claimId, claim);
-
-    try {
-      await ClaimRepository.updateStatusWithOptimisticLock(
+      const prevVersion = claim.version || 1;
+      const updatedClaim = await ClaimRepository.updateStatusWithOptimisticLock(
         claimId,
         ClaimStatus.UNDER_REVIEW,
         prevVersion,
-        { reviewerId: reviewer.id, reviewNotes: "Under review by staff" }
+        { reviewerId: reviewer.id, reviewNotes: "Under review by staff" },
+        client
       );
-    } catch {}
 
-    db.logAudit({
-      actorId: reviewer.id,
-      actorName: reviewer.name,
-      role: reviewer.role,
-      action: AuditAction.CLAIM_UPDATED,
-      entityType: "CLAIM",
-      entityId: claimId,
-      metadata: { action: "START_REVIEW", newStatus: ClaimStatus.UNDER_REVIEW },
+      await AuditRepository.create(
+        {
+          id: `aud-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+          timestamp: new Date().toISOString(),
+          actorId: reviewer.id,
+          actorName: reviewer.name,
+          role: reviewer.role,
+          action: AuditAction.CLAIM_UPDATED,
+          entityType: "CLAIM",
+          entityId: claimId,
+          metadata: { action: "START_REVIEW", newStatus: ClaimStatus.UNDER_REVIEW },
+        },
+        client
+      );
+
+      return updatedClaim;
     });
-
-    return claim;
   }
 
   /**
-   * Get single claim by ID with role & ownership check
+   * Get single claim by ID with role & ownership check from PostgreSQL
    */
-  public static getClaimById(
+  public static async getClaimById(
     claimId: string,
     requestUser: { id: string; role: UserRole }
-  ): { claim?: Claim; error?: string; status: number } {
-    const claim = db.getClaims().get(claimId);
+  ): Promise<{ claim?: Claim; error?: string; status: number }> {
+    const claim = await ClaimRepository.findById(claimId);
     if (!claim) {
       return { error: "Claim not found", status: 404 };
     }
@@ -300,7 +316,9 @@ export class ClaimService {
   }
 
   /**
-   * Staff approve claim flow with validation, audit, notifications, concurrency check and blockchain sync
+   * Staff approve claim flow:
+   * 1. Atomic SQL transaction: update claim (APPROVED), insert review, insert payment (PENDING), insert outbox (CLAIM_APPROVED), audit, notification.
+   * 2. Immediate outbox dispatch / background sync to record on-chain.
    */
   public static async approveClaim(
     claimId: string,
@@ -314,130 +332,160 @@ export class ClaimService {
       throw new ForbiddenError("Forbidden: Only authorized claim reviewers or administrators can approve claims.");
     }
 
-    const claim = db.getClaims().get(claimId);
-    if (!claim) {
-      throw new NotFoundError("Claim", claimId);
-    }
-
-    // Idempotency: Don't re-approve if already approved
-    if ((claim.status as ClaimStatus) === ClaimStatus.APPROVED || (claim.status as ClaimStatus) === ClaimStatus.PAID) {
-      return { claim, txHash: claim.blockchainTxHash };
-    }
-
-    // Concurrency protection check (BE-14)
-    ClaimLifecycleEngine.assertVersionMatch(claim.version, expectedVersion);
-
-    // State transition check via Central Lifecycle Engine (BE-09)
-    ClaimLifecycleEngine.assertValidClaimTransition(claim.status, ClaimStatus.APPROVED);
-
-    // Approved amount check
     if (typeof approvedAmount !== "number" || approvedAmount <= 0) {
       throw new ValidationError("Approved amount must be greater than 0.");
     }
 
-    if (approvedAmount > claim.requestedAmount) {
-      throw new BusinessRuleError(
-        `Approved amount ($${approvedAmount}) cannot exceed requested amount ($${claim.requestedAmount}).`
-      );
-    }
+    let updatedClaim!: Claim;
+    let outboxEventId: string | undefined;
 
-    // 1. Submit on-chain record
-    const bcResult = await BlockchainService.recordClaimApproval(claimId, approvedAmount, idempotencyKey);
+    // 1. Atomic SQL transaction
+    await dbConnection.transaction(async (client) => {
+      const claim = await ClaimRepository.findById(claimId, client);
+      if (!claim) {
+        throw new NotFoundError("Claim", claimId);
+      }
 
-    // 2. Update claim state
-    const prevVersion = claim.version || 1;
-    claim.status = ClaimStatus.APPROVED;
-    claim.approvedAmount = approvedAmount;
-    claim.reviewerId = reviewer.id;
-    claim.reviewNotes = notes || "Approved after review of evidence and policy terms.";
-    claim.blockchainTxHash = bcResult.txHash;
-    claim.version = prevVersion + 1;
-    claim.updatedAt = new Date().toISOString();
-    db.getClaims().set(claimId, claim);
+      // Idempotency: Don't re-approve if already approved
+      if (claim.status === ClaimStatus.APPROVED || claim.status === ClaimStatus.PAID) {
+        updatedClaim = claim;
+        return;
+      }
 
-    // 3. Create review record
-    const reviewId = `rev-${Date.now()}`;
-    const review: ClaimReview = {
-      id: reviewId,
-      claimId,
-      reviewerId: reviewer.id,
-      reviewerName: reviewer.name,
-      decision: "APPROVED",
-      approvedAmount,
-      notes: claim.reviewNotes,
-      createdAt: new Date().toISOString(),
-    };
-    db.getState().claimReviews.set(reviewId, review);
+      // Concurrency protection check (BE-14)
+      ClaimLifecycleEngine.assertVersionMatch(claim.version, expectedVersion);
 
-    // 4. Create pending payment record
-    const paymentId = `pay-${Date.now()}`;
-    const payment: Payment = {
-      id: paymentId,
-      claimId,
-      policyId: claim.policyId,
-      customerId: claim.customerId,
-      amount: approvedAmount,
-      status: PaymentStatus.PENDING,
-      paymentMethod: "CRYPTO_SMART_CONTRACT",
-      recipientWallet: "0x71C8366453AB548A31D08f237B855D282126B39a",
-      createdAt: new Date().toISOString(),
-    };
-    db.getPayments().set(paymentId, payment);
+      // State transition check via Central Lifecycle Engine (BE-09)
+      ClaimLifecycleEngine.assertValidClaimTransition(claim.status, ClaimStatus.APPROVED);
 
-    // Persist to PostgreSQL with Optimistic Locking
-    try {
-      await ClaimRepository.updateStatusWithOptimisticLock(
+      if (approvedAmount > claim.requestedAmount) {
+        throw new BusinessRuleError(
+          `Approved amount ($${approvedAmount}) cannot exceed requested amount ($${claim.requestedAmount}).`
+        );
+      }
+
+      const reviewNotes = notes || "Approved after review of evidence and policy terms.";
+      const currentVersion = expectedVersion !== undefined ? expectedVersion : (claim.version || 1);
+
+      // A. Update claim status to APPROVED with optimistic lock
+      updatedClaim = await ClaimRepository.updateStatusWithOptimisticLock(
         claimId,
         ClaimStatus.APPROVED,
-        expectedVersion !== undefined ? expectedVersion : prevVersion,
+        currentVersion,
         {
           approvedAmount,
           reviewerId: reviewer.id,
-          reviewNotes: claim.reviewNotes,
-          blockchainTxHash: bcResult.txHash,
+          reviewNotes,
+        },
+        client
+      );
+
+      // B. Insert Review record
+      const reviewId = `rev-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+      const review: ClaimReview = {
+        id: reviewId,
+        claimId,
+        reviewerId: reviewer.id,
+        reviewerName: reviewer.name,
+        decision: "APPROVED",
+        approvedAmount,
+        notes: reviewNotes,
+        createdAt: new Date().toISOString(),
+      };
+      await ReviewRepository.create(review, client);
+
+      // C. Insert Pending Payment record
+      const paymentId = `pay-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+      const payment: Payment = {
+        id: paymentId,
+        claimId,
+        policyId: claim.policyId,
+        customerId: claim.customerId,
+        amount: approvedAmount,
+        status: PaymentStatus.PENDING,
+        paymentMethod: "CRYPTO_SMART_CONTRACT",
+        recipientWallet: "0x71C8366453AB548A31D08f237B855D282126B39a",
+        createdAt: new Date().toISOString(),
+      };
+      await PaymentRepository.create(payment, client);
+
+      // D. Insert Outbox Event
+      outboxEventId = await OutboxRepository.create(
+        {
+          aggregateType: "CLAIM",
+          aggregateId: claimId,
+          eventType: "CLAIM_APPROVED",
+          payload: {
+            claimId,
+            approvedAmount,
+            policyId: claim.policyId,
+            requestedAmount: claim.requestedAmount,
+            claimantWallet: "0x71C8366453AB548A31D08f237B855D282126B39a",
+          },
+        },
+        client
+      );
+
+      // E. Audit Log
+      await AuditRepository.create(
+        {
+          id: `aud-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+          timestamp: new Date().toISOString(),
+          actorId: reviewer.id,
+          actorName: reviewer.name,
+          role: reviewer.role,
+          action: AuditAction.CLAIM_APPROVED,
+          entityType: "CLAIM",
+          entityId: claimId,
+          metadata: { approvedAmount, reviewNotes: notes },
+        },
+        client
+      );
+
+      // F. Notify Customer
+      await NotificationRepository.create(
+        {
+          id: `notif-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+          userId: claim.customerId,
+          title: `Hồ sơ ${claim.claimNumber} đã được phê duyệt`,
+          message: `Hồ sơ bồi thường trị giá $${approvedAmount.toLocaleString()} đã được chấp thuận và chuyển sang bộ phận giải ngân.`,
+          type: NotificationType.CLAIM_APPROVED,
+          read: false,
+          linkUrl: `/customer/claims/${claimId}`,
+          createdAt: new Date().toISOString(),
+        },
+        client
+      );
+    });
+
+    // 2. Immediate outbox dispatch: Synchronize on-chain (EVM)
+    let txHash: string | undefined = updatedClaim.blockchainTxHash;
+    try {
+      const bcResult = await BlockchainService.recordClaimApproval(
+        claimId,
+        approvedAmount,
+        idempotencyKey,
+        {
+          policyId: updatedClaim.policyId,
+          requestedAmount: updatedClaim.requestedAmount,
+          claimantWallet: "0x71C8366453AB548A31D08f237B855D282126B39a",
         }
       );
-      await ReviewRepository.create(review);
-      await PaymentRepository.create(payment);
-      await OutboxRepository.create({
-        aggregateType: "CLAIM",
-        aggregateId: claimId,
-        eventType: "CLAIM_APPROVED",
-        payload: { claimId, approvedAmount, txHash: bcResult.txHash },
-      });
-    } catch (err) {
-      if (err instanceof ConflictError) throw err;
+      txHash = bcResult.txHash;
+      updatedClaim.blockchainTxHash = txHash;
+      await ClaimRepository.updateBlockchainTx(claimId, txHash).catch(() => {});
+      if (outboxEventId) {
+        await OutboxRepository.markProcessed(outboxEventId, txHash).catch(() => {});
+      }
+    } catch {
+      // If blockchain execution fails, database state remains APPROVED and outbox event is left for retry
     }
 
-    // 5. Audit Log
-    db.logAudit({
-      actorId: reviewer.id,
-      actorName: reviewer.name,
-      role: reviewer.role,
-      action: AuditAction.CLAIM_APPROVED,
-      entityType: "CLAIM",
-      entityId: claimId,
-      metadata: { approvedAmount, txHash: bcResult.txHash, reviewNotes: notes },
-    });
-
-    // 6. Notify Customer
-    const notifId = `notif-${Date.now()}`;
-    db.getNotifications().set(notifId, {
-      id: notifId,
-      userId: claim.customerId,
-      title: `Hồ sơ ${claim.claimNumber} đã được phê duyệt`,
-      message: `Hồ sơ bồi thường trị giá $${approvedAmount.toLocaleString()} đã được chấp thuận và chuyển sang bộ phận giải ngân.`,
-      type: NotificationType.CLAIM_APPROVED,
-      read: false,
-      linkUrl: `/customer/claims/${claimId}`,
-      createdAt: new Date().toISOString(),
-    });
-
-    return { claim, txHash: bcResult.txHash };
+    return { claim: updatedClaim, txHash };
   }
 
   /**
-   * Staff reject claim flow with validation, audit, notifications and concurrency check
+   * Staff reject claim flow: Atomic SQL transaction in PostgreSQL
    */
   public static async rejectClaim(
     claimId: string,
@@ -454,85 +502,90 @@ export class ClaimService {
       throw new ValidationError("A specific rejection reason is mandatory.");
     }
 
-    const claim = db.getClaims().get(claimId);
-    if (!claim) {
-      throw new NotFoundError("Claim", claimId);
-    }
+    return await dbConnection.transaction(async (client) => {
+      const claim = await ClaimRepository.findById(claimId, client);
+      if (!claim) {
+        throw new NotFoundError("Claim", claimId);
+      }
 
-    // Concurrency protection check (BE-14)
-    ClaimLifecycleEngine.assertVersionMatch(claim.version, expectedVersion);
+      // Concurrency protection check (BE-14)
+      ClaimLifecycleEngine.assertVersionMatch(claim.version, expectedVersion);
 
-    // State transition check via Central Lifecycle Engine (BE-09)
-    ClaimLifecycleEngine.assertValidClaimTransition(claim.status, ClaimStatus.REJECTED);
+      // State transition check via Central Lifecycle Engine (BE-09)
+      ClaimLifecycleEngine.assertValidClaimTransition(claim.status, ClaimStatus.REJECTED);
 
-    // Update claim
-    const prevVersion = claim.version || 1;
-    claim.status = ClaimStatus.REJECTED;
-    claim.reviewerId = reviewer.id;
-    claim.reviewNotes = `Rejection: ${reason}. ${notes || ""}`.trim();
-    claim.version = prevVersion + 1;
-    claim.updatedAt = new Date().toISOString();
-    db.getClaims().set(claimId, claim);
+      const reviewNotes = `Rejection: ${reason}. ${notes || ""}`.trim();
+      const currentVersion = expectedVersion !== undefined ? expectedVersion : (claim.version || 1);
 
-    // Create review record
-    const reviewId = `rev-${Date.now()}`;
-    const review: ClaimReview = {
-      id: reviewId,
-      claimId,
-      reviewerId: reviewer.id,
-      reviewerName: reviewer.name,
-      decision: "REJECTED",
-      reason,
-      notes,
-      createdAt: new Date().toISOString(),
-    };
-    db.getState().claimReviews.set(reviewId, review);
-
-    try {
-      await ClaimRepository.updateStatusWithOptimisticLock(
+      // A. Update claim status to REJECTED with optimistic lock
+      const updatedClaim = await ClaimRepository.updateStatusWithOptimisticLock(
         claimId,
         ClaimStatus.REJECTED,
-        expectedVersion !== undefined ? expectedVersion : prevVersion,
+        currentVersion,
         {
           reviewerId: reviewer.id,
-          reviewNotes: claim.reviewNotes,
-        }
+          reviewNotes,
+        },
+        client
       );
-      await ReviewRepository.create(review);
-      await OutboxRepository.create({
-        aggregateType: "CLAIM",
-        aggregateId: claimId,
-        eventType: "CLAIM_REJECTED",
-        payload: { claimId, reason, notes },
-      });
-    } catch (err) {
-      if (err instanceof ConflictError) throw err;
-    }
 
-    // Audit Log
-    db.logAudit({
-      actorId: reviewer.id,
-      actorName: reviewer.name,
-      role: reviewer.role,
-      action: AuditAction.CLAIM_REJECTED,
-      entityType: "CLAIM",
-      entityId: claimId,
-      metadata: { reason, notes },
+      // B. Insert Review Record
+      const reviewId = `rev-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+      const review: ClaimReview = {
+        id: reviewId,
+        claimId,
+        reviewerId: reviewer.id,
+        reviewerName: reviewer.name,
+        decision: "REJECTED",
+        reason,
+        notes,
+        createdAt: new Date().toISOString(),
+      };
+      await ReviewRepository.create(review, client);
+
+      // C. Insert Outbox Event
+      await OutboxRepository.create(
+        {
+          aggregateType: "CLAIM",
+          aggregateId: claimId,
+          eventType: "CLAIM_REJECTED",
+          payload: { claimId, reason, notes },
+        },
+        client
+      );
+
+      // D. Audit Log
+      await AuditRepository.create(
+        {
+          id: `aud-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+          timestamp: new Date().toISOString(),
+          actorId: reviewer.id,
+          actorName: reviewer.name,
+          role: reviewer.role,
+          action: AuditAction.CLAIM_REJECTED,
+          entityType: "CLAIM",
+          entityId: claimId,
+          metadata: { reason, notes },
+        },
+        client
+      );
+
+      // E. Notify Customer
+      await NotificationRepository.create(
+        {
+          id: `notif-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+          userId: claim.customerId,
+          title: `Hồ sơ ${claim.claimNumber} bị từ chối`,
+          message: `Hồ sơ bồi thường của bạn đã bị từ chối với lý do: "${reason}". Bấm để xem chi tiết phản hồi.`,
+          type: NotificationType.CLAIM_REJECTED,
+          read: false,
+          linkUrl: `/customer/claims/${claimId}`,
+          createdAt: new Date().toISOString(),
+        },
+        client
+      );
+
+      return updatedClaim;
     });
-
-    // Notify Customer
-    const notifId = `notif-${Date.now()}`;
-    db.getNotifications().set(notifId, {
-      id: notifId,
-      userId: claim.customerId,
-      title: `Hồ sơ ${claim.claimNumber} bị từ chối`,
-      message: `Hồ sơ bồi thường của bạn đã bị từ chối với lý do: "${reason}". Bấm để xem chi tiết phản hồi.`,
-      type: NotificationType.CLAIM_REJECTED,
-      read: false,
-      linkUrl: `/customer/claims/${claimId}`,
-      createdAt: new Date().toISOString(),
-    });
-
-    return claim;
   }
 }

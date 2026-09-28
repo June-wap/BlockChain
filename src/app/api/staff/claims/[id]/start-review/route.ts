@@ -1,9 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { ClaimService } from "@/server/services/claim.service";
-import { db } from "@/server/db/store";
 import { RbacGuard } from "@/server/core/rbac";
-import { handleApiError, AuthenticationError, NotFoundError } from "@/server/core/errors";
-import { AuditAction, ClaimStatus, UserRole } from "@/types";
+import { handleApiError, AuthenticationError } from "@/server/core/errors";
+import { UserRole } from "@/types";
 import { getAuthenticatedUser } from "@/server/core/auth-extractor";
 
 export const dynamic = "force-dynamic";

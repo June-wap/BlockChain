@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { db } from "@/server/db/store";
 import { BlockchainService } from "@/server/services/blockchain.service";
-import { AuditAction, PaymentStatus, UserRole } from "@/types";
+import { AuditAction, PaymentStatus } from "@/types";
 import { getAuthenticatedUser } from "@/server/core/auth-extractor";
 import { RbacGuard } from "@/server/core/rbac";
+import { PaymentRepository } from "@/server/repositories/payment.repository";
+import { BlockchainTransactionRepository } from "@/server/repositories/blockchain-tx.repository";
+import { AuditRepository } from "@/server/repositories/audit.repository";
 
 export const dynamic = "force-dynamic";
 
@@ -29,23 +31,22 @@ export async function POST(
       );
     }
 
-    const payment = db.getPayments().get(params.id);
+    const payment = await PaymentRepository.findById(params.id);
     if (!payment) {
       return NextResponse.json({ success: false, error: "Payment not found" }, { status: 404 });
     }
 
-    // Check if on-chain state already has confirmed payment
-    for (const tx of db.getBlockchainTransactions().values()) {
-      if (tx.paymentId === payment.id && tx.status === "CONFIRMED") {
-        payment.status = PaymentStatus.SUCCESS;
-        payment.blockchainTxHash = tx.txHash;
-        db.getPayments().set(payment.id, payment);
-        return NextResponse.json({
-          success: true,
-          data: payment,
-          message: "Payment reconciliation: Transaction was already confirmed on-chain.",
-        });
-      }
+    // Check if on-chain state already has confirmed payment in PostgreSQL
+    const existingTx = await BlockchainTransactionRepository.findByPaymentId(payment.id);
+    if (existingTx && existingTx.status === "CONFIRMED") {
+      payment.status = PaymentStatus.SUCCESS;
+      payment.blockchainTxHash = existingTx.txHash;
+      await PaymentRepository.update(payment);
+      return NextResponse.json({
+        success: true,
+        data: payment,
+        message: "Payment reconciliation: Transaction was already confirmed on-chain.",
+      });
     }
 
     // Execute retry
@@ -59,9 +60,11 @@ export async function POST(
     payment.status = PaymentStatus.SUCCESS;
     payment.blockchainTxHash = bcResult.txHash;
     payment.processedAt = new Date().toISOString();
-    db.getPayments().set(payment.id, payment);
+    await PaymentRepository.update(payment);
 
-    db.logAudit({
+    await AuditRepository.create({
+      id: `aud-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+      timestamp: new Date().toISOString(),
       actorId: user.id,
       actorName: user.fullName,
       role: user.role,
@@ -69,7 +72,7 @@ export async function POST(
       entityType: "PAYMENT",
       entityId: payment.id,
       metadata: { txHash: bcResult.txHash },
-    });
+    }).catch(() => {});
 
     return NextResponse.json({
       success: true,

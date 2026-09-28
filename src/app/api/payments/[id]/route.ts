@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { db } from "@/server/db/store";
+import { PaymentRepository } from "@/server/repositories/payment.repository";
+import { ClaimRepository } from "@/server/repositories/claim.repository";
+import { PolicyRepository } from "@/server/repositories/policy.repository";
 import { RbacGuard } from "@/server/core/rbac";
 import { handleApiError, AuthenticationError, NotFoundError } from "@/server/core/errors";
 import { getAuthenticatedUser } from "@/server/core/auth-extractor";
@@ -17,7 +19,7 @@ export async function GET(
       throw new AuthenticationError("Authentication required.");
     }
 
-    const payment = db.getPayments().get(params.id);
+    const payment = await PaymentRepository.findById(params.id);
     if (!payment) {
       throw new NotFoundError("Payment", params.id);
     }
@@ -25,8 +27,10 @@ export async function GET(
     // IDOR Check: Customer can only view their own payment
     RbacGuard.assertOwnership(payment.customerId, user, { allowStaff: true, allowAdmin: true });
 
-    const claim = db.getClaims().get(payment.claimId);
-    const policy = db.getPolicies().get(payment.policyId);
+    const [claim, policy] = await Promise.all([
+      ClaimRepository.findById(payment.claimId),
+      PolicyRepository.findById(payment.policyId),
+    ]);
 
     return NextResponse.json({
       success: true,
