@@ -5,7 +5,15 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { UserRole } from "@/types";
-import { Shield, ArrowRight, Lock, Mail, User, Phone, AlertCircle } from "lucide-react";
+import {
+  Shield,
+  ArrowRight,
+  Lock,
+  Mail,
+  User,
+  Phone,
+  AlertCircle,
+} from "lucide-react";
 
 export default function RegisterPage() {
   const router = useRouter();
@@ -43,13 +51,20 @@ export default function RegisterPage() {
 
       const json = await res.json();
       if (!res.ok || !json.success) {
-        throw new Error(json.error || "Registration failed.");
+        const message =
+          typeof json.error === "string"
+            ? json.error
+            : json.error?.message || "Registration failed.";
+
+        throw new Error(message);
       }
 
       await login(json.data.user, json.data.token);
       router.replace("/customer/dashboard");
     } catch (err: any) {
-      setErrorMessage(err.message || "Failed to create account. Please try again.");
+      setErrorMessage(
+        err.message || "Failed to create account. Please try again.",
+      );
     } finally {
       setIsSubmitting(false);
     }
@@ -62,7 +77,9 @@ export default function RegisterPage() {
           <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-brand-600 to-indigo-500 flex items-center justify-center text-white shadow-md shadow-brand-500/20">
             <Shield className="w-5 h-5" />
           </div>
-          <span className="text-xl font-bold tracking-tight text-white">InsurChain</span>
+          <span className="text-xl font-bold tracking-tight text-white">
+            InsurChain
+          </span>
         </Link>
         <h2 className="text-2xl font-bold tracking-tight text-white">
           Create an Insurance Account
@@ -174,14 +191,19 @@ export default function RegisterPage() {
               disabled={isSubmitting}
               className="w-full mt-2 flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl bg-brand-600 hover:bg-brand-500 text-white text-xs font-semibold shadow-md transition disabled:opacity-50"
             >
-              <span>{isSubmitting ? "Creating account..." : "Complete Registration"}</span>
+              <span>
+                {isSubmitting ? "Creating account..." : "Complete Registration"}
+              </span>
               <ArrowRight className="w-4 h-4" />
             </button>
           </form>
 
           <div className="text-center pt-2 border-t border-slate-700 text-xs text-slate-400">
             Already have an account?{" "}
-            <Link href="/login" className="font-medium text-brand-400 hover:text-brand-300">
+            <Link
+              href="/login"
+              className="font-medium text-brand-400 hover:text-brand-300"
+            >
               Sign in
             </Link>
           </div>
