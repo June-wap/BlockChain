@@ -28,6 +28,8 @@ import { NotificationRepository } from "../repositories/notification.repository"
 import { AuditRepository } from "../repositories/audit.repository";
 import { OutboxRepository } from "../repositories/outbox.repository";
 import { IdempotencyRepository } from "../repositories/idempotency.repository";
+import { UserRepository } from "../repositories/user.repository";
+import { ethers } from "ethers";
 
 export interface CreateClaimInput {
   policyId: string;
@@ -192,6 +194,11 @@ export class ClaimService {
     await dbConnection.transaction(async (client) => {
       await ClaimRepository.create(newClaim, client);
 
+      const customerUser = await UserRepository.findById(customerId, client);
+      const claimantWallet = customerUser?.walletAddress && ethers.isAddress(customerUser.walletAddress.toLowerCase())
+        ? ethers.getAddress(customerUser.walletAddress.toLowerCase())
+        : undefined;
+
       await OutboxRepository.create(
         {
           aggregateType: "CLAIM",
@@ -202,7 +209,7 @@ export class ClaimService {
             claimNumber,
             requestedAmount: input.requestedAmount,
             policyId: policy.id,
-            claimantWallet: "0x71C8366453AB548A31D08f237B855D282126B39a",
+            claimantWallet: claimantWallet || null,
           },
         },
         client
@@ -338,6 +345,7 @@ export class ClaimService {
 
     let updatedClaim!: Claim;
     let outboxEventId: string | undefined;
+    let verifiedWallet: string | undefined;
 
     // 1. Atomic SQL transaction
     await dbConnection.transaction(async (client) => {
@@ -394,6 +402,12 @@ export class ClaimService {
       };
       await ReviewRepository.create(review, client);
 
+      // Resolve customer verified wallet for crypto disbursement
+      const customer = await UserRepository.findById(claim.customerId, client);
+      verifiedWallet = customer?.walletAddress && ethers.isAddress(customer.walletAddress.toLowerCase())
+        ? ethers.getAddress(customer.walletAddress.toLowerCase())
+        : undefined;
+
       // C. Insert Pending Payment record
       const paymentId = `pay-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
       const payment: Payment = {
@@ -404,7 +418,7 @@ export class ClaimService {
         amount: approvedAmount,
         status: PaymentStatus.PENDING,
         paymentMethod: "CRYPTO_SMART_CONTRACT",
-        recipientWallet: "0x71C8366453AB548A31D08f237B855D282126B39a",
+        recipientWallet: verifiedWallet,
         createdAt: new Date().toISOString(),
       };
       await PaymentRepository.create(payment, client);
@@ -420,7 +434,7 @@ export class ClaimService {
             approvedAmount,
             policyId: claim.policyId,
             requestedAmount: claim.requestedAmount,
-            claimantWallet: "0x71C8366453AB548A31D08f237B855D282126B39a",
+            claimantWallet: verifiedWallet || null,
           },
         },
         client
@@ -468,7 +482,7 @@ export class ClaimService {
         {
           policyId: updatedClaim.policyId,
           requestedAmount: updatedClaim.requestedAmount,
-          claimantWallet: "0x71C8366453AB548A31D08f237B855D282126B39a",
+          claimantWallet: verifiedWallet,
         }
       );
       txHash = bcResult.txHash;

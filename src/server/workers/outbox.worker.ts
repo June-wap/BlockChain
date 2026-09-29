@@ -1,6 +1,7 @@
 import { OutboxRepository, OutboxEvent } from "../repositories/outbox.repository";
 import { ClaimRepository } from "../repositories/claim.repository";
 import { PaymentRepository } from "../repositories/payment.repository";
+import { UserRepository } from "../repositories/user.repository";
 import { BlockchainService } from "../services/blockchain.service";
 import { dbConnection } from "../db/postgres";
 import { ClaimStatus, PaymentStatus } from "@/types";
@@ -65,8 +66,21 @@ export class OutboxWorker {
             const paymentId = event.aggregateId;
             const claimId = event.payload.claimId;
             const amount = Number(event.payload.amount || 0);
-            const recipientWallet =
-              event.payload.recipientWallet || "0x71C8366453AB548A31D08f237B855D282126B39a";
+            let recipientWallet = event.payload.recipientWallet;
+            if (!recipientWallet) {
+              const claim = await ClaimRepository.findById(claimId);
+              if (claim?.customerId) {
+                const customer = await UserRepository.findById(claim.customerId);
+                recipientWallet = customer?.walletAddress;
+              }
+            }
+            if (!recipientWallet) {
+              if (process.env.NODE_ENV === "test") {
+                recipientWallet = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8";
+              } else {
+                throw new Error("CUSTOMER_WALLET_NOT_VERIFIED: Recipient wallet is required for smart contract payment disbursement.");
+              }
+            }
 
             const result = await BlockchainService.recordPaymentDisbursement(
               paymentId,
@@ -105,8 +119,21 @@ export class OutboxWorker {
             const claimId = event.aggregateId;
             const policyId = event.payload.policyId || "pol-default";
             const requestedAmount = Number(event.payload.requestedAmount || 1000);
-            const claimantWallet =
-              event.payload.claimantWallet || "0x71C8366453AB548A31D08f237B855D282126B39a";
+            let claimantWallet = event.payload.claimantWallet;
+            if (!claimantWallet) {
+              const claim = await ClaimRepository.findById(claimId);
+              if (claim?.customerId) {
+                const customer = await UserRepository.findById(claim.customerId);
+                claimantWallet = customer?.walletAddress;
+              }
+            }
+            if (!claimantWallet) {
+              if (process.env.NODE_ENV === "test") {
+                claimantWallet = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8";
+              } else {
+                throw new Error("CUSTOMER_WALLET_NOT_VERIFIED: Claimant wallet is required to record claim on-chain.");
+              }
+            }
 
             const result = await BlockchainService.recordClaimSubmission(
               claimId,

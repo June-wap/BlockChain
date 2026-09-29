@@ -73,8 +73,8 @@ contract InsuranceClaimHub is Context, ReentrancyGuard {
         bytes32 claimHash;          // Hash of claim ID + customer salt
         bytes32 policyHash;         // Hash of policy ID
         address payable claimant;   // Customer wallet address for payment
-        uint256 requestedAmount;    // Currency units (wei / standard units)
-        uint256 approvedAmount;     // Approved amount for payout
+        uint256 requestedAmount;    // native payout amount in wei
+        uint256 approvedAmount;     // approved native payout amount in wei
         ClaimStatus status;         // Current lifecycle status
         uint64 submittedAt;         // Unix timestamp
         uint64 processedAt;         // Unix timestamp
@@ -226,11 +226,11 @@ contract InsuranceClaimHub is Context, ReentrancyGuard {
         emit ClaimStatusChanged(claimHash, oldStatus, ClaimStatus.Paid, uint64(block.timestamp));
         emit PaymentReleased(claimHash, claim.claimant, claim.approvedAmount, uint64(block.timestamp));
 
-        // If native currency contract has balance, transfer to claimant
-        if (address(this).balance >= claim.approvedAmount) {
-            (bool success, ) = claim.claimant.call{value: claim.approvedAmount}("");
-            require(success, "Payment transfer failed");
-        }
+        // Ensure contract has sufficient escrow funding before releasing payment
+        require(address(this).balance >= claim.approvedAmount, "INSUFFICIENT_CONTRACT_ESCROW");
+
+        (bool success, ) = claim.claimant.call{value: claim.approvedAmount}("");
+        require(success, "Payment transfer failed");
     }
 
     /**

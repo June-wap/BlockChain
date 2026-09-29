@@ -7,7 +7,10 @@ export const dynamic = "force-dynamic";
 export async function GET(request: NextRequest) {
   const user = await getAuthenticatedUser(request);
   if (!user) {
-    return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
+    const response = NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
+    response.cookies.set("auth_token", "", { path: "/", maxAge: 0, httpOnly: true });
+    response.cookies.set("auth_role", "", { path: "/", maxAge: 0 });
+    return response;
   }
 
   const capabilities = AuthService.getCapabilities(user.role);

@@ -3,27 +3,21 @@
 import React, { useEffect, useState } from "react";
 import { User } from "@/types";
 import { fetchProfile, updateProfileApi } from "@/lib/api/profile";
-import { formatDate } from "@/lib/formatters";
 import {
   User as UserIcon,
-  Mail,
-  Phone,
-  Wallet,
-  Shield,
   CheckCircle2,
   AlertCircle,
   Save,
-  Link2,
-  Unlink,
 } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { Skeleton } from "@/components/ui/Skeleton";
+import { WalletStatus } from "@/components/web3/WalletStatus";
 
 export default function CustomerProfilePage() {
   const [profile, setProfile] = useState<User | null>(null);
   const [fullName, setFullName] = useState("");
   const [phone, setPhone] = useState("");
-  const [walletAddress, setWalletAddress] = useState("");
+  const [walletAddress, setWalletAddress] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
@@ -37,7 +31,7 @@ export default function CustomerProfilePage() {
         setProfile(data);
         setFullName(data.fullName || "");
         setPhone(data.phoneNumber || "");
-        setWalletAddress(data.walletAddress || "");
+        setWalletAddress(data.walletAddress || null);
       } catch (err: any) {
         setErrorMsg(err.message || "Failed to load profile.");
       } finally {
@@ -57,10 +51,9 @@ export default function CustomerProfilePage() {
       const updated = await updateProfileApi({
         fullName,
         phoneNumber: phone,
-        walletAddress,
       });
       setProfile(updated);
-      setSuccessMsg("Profile information updated successfully.");
+      setSuccessMsg("Personal contact details updated successfully.");
     } catch (err: any) {
       setErrorMsg(err.message || "Failed to save profile changes.");
     } finally {
@@ -68,13 +61,14 @@ export default function CustomerProfilePage() {
     }
   };
 
-  const handleSimulatedWalletConnect = () => {
-    // Standard EVM simulation address
-    setWalletAddress("0x71C8366453AB548A31D08f237B855D282126B39a");
+  const handleWalletLinked = (newAddress: string) => {
+    setWalletAddress(newAddress);
+    setSuccessMsg("MetaMask wallet verified and linked to your account successfully.");
   };
 
-  const handleWalletDisconnect = () => {
-    setWalletAddress("");
+  const handleWalletUnlinked = () => {
+    setWalletAddress(null);
+    setSuccessMsg("Web3 payout wallet unlinked successfully.");
   };
 
   if (isLoading) {
@@ -95,7 +89,7 @@ export default function CustomerProfilePage() {
           Account Profile & Payout Settings
         </h1>
         <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-1">
-          Manage your personal contact details and Web3 wallet for automated claim payouts
+          Manage your personal contact details and MetaMask Web3 wallet for automated claim payouts
         </p>
       </div>
 
@@ -113,8 +107,8 @@ export default function CustomerProfilePage() {
         </div>
       )}
 
+      {/* Personal Details Form */}
       <form onSubmit={handleSave} className="space-y-6">
-        {/* Personal Details Card */}
         <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl p-6 shadow-xs space-y-4">
           <h2 className="text-sm font-bold text-slate-900 dark:text-white uppercase tracking-wider flex items-center gap-2">
             <UserIcon className="w-4 h-4 text-brand-500" />
@@ -174,85 +168,22 @@ export default function CustomerProfilePage() {
               </div>
             </div>
           </div>
-        </div>
 
-        {/* Web3 Payout Wallet Card */}
-        <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl p-6 shadow-xs space-y-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-sm font-bold text-slate-900 dark:text-white uppercase tracking-wider flex items-center gap-2">
-              <Wallet className="w-4 h-4 text-brand-500" />
-              Web3 Payout Wallet
-            </h2>
-            {walletAddress ? (
-              <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/50 px-2 py-0.5 rounded border border-emerald-500/20">
-                <CheckCircle2 className="w-3 h-3" />
-                Wallet Linked
-              </span>
-            ) : (
-              <span className="text-[11px] text-slate-400">No Wallet Connected</span>
-            )}
+          <div className="flex justify-end pt-2">
+            <Button type="submit" variant="primary" size="sm" disabled={isSaving}>
+              <Save className="w-4 h-4 mr-2" />
+              {isSaving ? "Saving..." : "Save Contact Info"}
+            </Button>
           </div>
-
-          <p className="text-xs text-slate-500">
-            Approved claims can be disbursed directly into this Ethereum/EVM wallet address via the InsuranceClaimHub smart contract.
-          </p>
-
-          <div>
-            <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-              Wallet Address (EVM Compatible)
-            </label>
-            <div className="flex flex-col sm:flex-row gap-2">
-              <input
-                type="text"
-                value={walletAddress}
-                onChange={(e) => setWalletAddress(e.target.value)}
-                placeholder="0x..."
-                className="flex-1 px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg text-xs font-mono text-slate-900 dark:text-white placeholder-slate-400 focus:outline-hidden focus:border-brand-500"
-              />
-              {walletAddress ? (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  onClick={handleWalletDisconnect}
-                  className="text-red-500 hover:text-red-600"
-                >
-                  <Unlink className="w-3.5 h-3.5 mr-1" />
-                  Disconnect
-                </Button>
-              ) : (
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="sm"
-                  onClick={handleSimulatedWalletConnect}
-                >
-                  <Link2 className="w-3.5 h-3.5 mr-1" />
-                  Connect Wallet
-                </Button>
-              )}
-            </div>
-          </div>
-
-          {/* Security Banner */}
-          <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700/60 text-[11px] text-slate-600 dark:text-slate-400 space-y-1">
-            <div className="flex items-center gap-1.5 font-semibold text-slate-800 dark:text-slate-200">
-              <Shield className="w-3.5 h-3.5 text-brand-500" />
-              <span>Wallet Security Guarantee</span>
-            </div>
-            <p>
-              InsurChain never requests, stores, or transmits your private keys or secret recovery phrases. Only your public account address is stored for payout routing.
-            </p>
-          </div>
-        </div>
-
-        <div className="flex justify-end">
-          <Button type="submit" variant="primary" size="md" disabled={isSaving}>
-            <Save className="w-4 h-4 mr-2" />
-            {isSaving ? "Saving Changes..." : "Save Profile Details"}
-          </Button>
         </div>
       </form>
+
+      {/* Real Web3 MetaMask Payout Wallet Card */}
+      <WalletStatus
+        persistedWalletAddress={walletAddress}
+        onWalletLinked={handleWalletLinked}
+        onWalletUnlinked={handleWalletUnlinked}
+      />
     </div>
   );
 }

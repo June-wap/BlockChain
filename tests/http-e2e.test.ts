@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { NextRequest } from "next/server";
-import { initDatabase, closeDatabase } from "@/server/db/postgres";
+import { initDatabase, closeDatabase, dbConnection } from "@/server/db/postgres";
 import { POST as registerRoute } from "@/app/api/auth/register/route";
 import { POST as loginRoute } from "@/app/api/auth/login/route";
 import { POST as submitClaimRoute, GET as getClaimsRoute } from "@/app/api/claims/route";
@@ -29,6 +29,7 @@ describe("P6 — Complete HTTP E2E Integration Pipeline", () => {
 
   beforeAll(async () => {
     await initDatabase();
+    await dbConnection.query("DELETE FROM outbox_events;");
 
     customerEmail = `http_e2e_cust_${Date.now()}@insurance.vn`;
     const reviewerEmail = `http_e2e_rev_${Date.now()}@insurance.vn`;

@@ -131,6 +131,21 @@ export class UserRepository {
     );
   }
 
+  public static async updateWalletAddress(
+    id: string,
+    walletAddress: string | null,
+    client?: IDatabaseClient
+  ): Promise<void> {
+    const db = client || dbConnection;
+    await db.query(
+      `UPDATE users
+       SET wallet_address = $1,
+           updated_at = NOW()
+       WHERE id = $2;`,
+      [walletAddress ? walletAddress.trim() : null, id]
+    );
+  }
+
   public static async updateRole(id: string, role: UserRole, client?: IDatabaseClient): Promise<void> {
     const db = client || dbConnection;
     await db.query(

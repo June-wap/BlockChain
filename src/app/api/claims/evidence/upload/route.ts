@@ -25,13 +25,22 @@ export async function POST(request: NextRequest) {
       throw new ValidationError("No file provided. 'file' field is required in form-data.");
     }
 
+    let mimeType = file.type;
+    if (!mimeType || mimeType === "application/octet-stream") {
+      const ext = (file.name || "").split(".").pop()?.toLowerCase();
+      if (ext === "pdf") mimeType = "application/pdf";
+      else if (ext === "png") mimeType = "image/png";
+      else if (ext === "jpg" || ext === "jpeg") mimeType = "image/jpeg";
+      else if (ext === "webp") mimeType = "image/webp";
+    }
+
     const arrayBuffer = await file.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
 
     const evidence = await EvidenceService.processUpload(
       buffer,
       file.name,
-      file.type,
+      mimeType,
       user,
       claimId
     );

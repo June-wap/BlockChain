@@ -428,7 +428,7 @@ export default function StaffClaimReviewPage() {
                 <span>Blockchain Anchoring Warning</span>
               </div>
               <p>
-                Approving this claim permanently records the approval determination and authorization hash on the Ethereum Sepolia testnet ledger.
+                Approving this claim permanently records the approval determination and authorization hash on the active blockchain ledger ({process.env.NEXT_PUBLIC_BLOCKCHAIN_CHAIN_ID === "31337" || !process.env.NEXT_PUBLIC_BLOCKCHAIN_CHAIN_ID ? "Hardhat Local (Chain 31337)" : "Ethereum Sepolia"}).
               </p>
             </div>
 
@@ -447,6 +447,12 @@ export default function StaffClaimReviewPage() {
                 <span className="text-slate-500 font-bold">Approved Settlement Payout</span>
                 <span className="font-bold text-sm text-emerald-600 dark:text-emerald-400">
                   {formatCurrency(Number(approvedAmount))}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Demo settlement conversion</span>
+                <span className="font-mono font-medium text-slate-700 dark:text-slate-300">
+                  {(Number(approvedAmount) / (Number(process.env.NEXT_PUBLIC_DEMO_USD_PER_ETH) || 1000)).toFixed(4)} ETH
                 </span>
               </div>
             </div>

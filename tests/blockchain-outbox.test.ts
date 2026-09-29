@@ -54,7 +54,7 @@ describe("P5 — Real Blockchain Backend Integration & Transactional Outbox Test
       expect(isRecorded).toBe(true);
 
       const onChainClaim = await contract.getClaim(claimHash);
-      expect(onChainClaim.requestedAmount).toBe(1500n);
+      expect(onChainClaim.requestedAmount).toBe(1500000000000000000n);
       expect(onChainClaim.status).toBe(1n); // Submitted = 1
     });
 
@@ -79,7 +79,7 @@ describe("P5 — Real Blockchain Backend Integration & Transactional Outbox Test
       const onChain = await contract.getClaim(claimHash);
 
       expect(onChain.status).toBe(3n); // Approved = 3
-      expect(onChain.approvedAmount).toBe(1200n);
+      expect(onChain.approvedAmount).toBe(1200000000000000000n);
     });
 
     it("should verify Zero PII on-chain (only cryptographic hashes stored)", async () => {

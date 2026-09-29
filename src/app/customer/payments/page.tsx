@@ -303,6 +303,24 @@ export default function CustomerPaymentsPage() {
                 {formatCurrency(activePayment.amount)}
               </span>
             </div>
+            {(activePayment.paymentMethod === "CRYPTO_SMART_CONTRACT" || !!activePayment.recipientWallet) && (
+              <>
+                <div className="flex justify-between items-center pb-2 border-b border-slate-200 dark:border-slate-700">
+                  <span className="text-slate-500">Demo settlement conversion</span>
+                  <span className="font-mono font-medium text-slate-800 dark:text-slate-200">
+                    {(activePayment.amount / (Number(process.env.NEXT_PUBLIC_DEMO_USD_PER_ETH) || 1000)).toFixed(4)} ETH
+                  </span>
+                </div>
+                <div className="flex justify-between items-center pb-2 border-b border-slate-200 dark:border-slate-700">
+                  <span className="text-slate-500">Blockchain Network</span>
+                  <span className="font-medium text-slate-800 dark:text-slate-200">
+                    {process.env.NEXT_PUBLIC_BLOCKCHAIN_CHAIN_ID === "31337" || !process.env.NEXT_PUBLIC_BLOCKCHAIN_CHAIN_ID
+                      ? "Hardhat Local (Chain 31337)"
+                      : "Ethereum Sepolia (Chain 11155111)"}
+                  </span>
+                </div>
+              </>
+            )}
             <div className="flex justify-between items-center pb-2 border-b border-slate-200 dark:border-slate-700">
               <span className="text-slate-500">Disbursement Method</span>
               <span className="font-medium text-slate-800 dark:text-slate-200">

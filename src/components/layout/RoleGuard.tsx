@@ -23,17 +23,20 @@ export const RoleGuard: React.FC<RoleGuardProps> = ({
   const router = useRouter();
   const pathname = usePathname();
 
+  const redirectedRef = React.useRef(false);
+
   useEffect(() => {
-    if (!isLoading && !isAuthenticated) {
-      router.push(`/login?redirect=${encodeURIComponent(pathname)}`);
+    if (!isLoading && !isAuthenticated && !redirectedRef.current) {
+      redirectedRef.current = true;
+      router.replace(`/login?redirect=${encodeURIComponent(pathname)}`);
     }
   }, [isLoading, isAuthenticated, pathname, router]);
 
   if (isLoading) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50">
-        <div className="w-12 h-12 border-4 border-brand-500 border-t-transparent rounded-full animate-spin"></div>
-        <p className="mt-4 text-sm font-medium text-slate-600">
+        <div className="w-10 h-10 border-3 border-brand-500 border-t-transparent rounded-full animate-spin"></div>
+        <p className="mt-4 text-xs font-medium text-slate-500 animate-pulse">
           Verifying security credentials & RBAC permissions...
         </p>
       </div>
@@ -43,8 +46,8 @@ export const RoleGuard: React.FC<RoleGuardProps> = ({
   if (!isAuthenticated || !user || !role) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50">
-        <div className="w-12 h-12 border-4 border-brand-500 border-t-transparent rounded-full animate-spin"></div>
-        <p className="mt-4 text-sm font-medium text-slate-600">
+        <div className="w-10 h-10 border-3 border-brand-500 border-t-transparent rounded-full animate-spin"></div>
+        <p className="mt-4 text-xs font-medium text-slate-500">
           Redirecting to login...
         </p>
       </div>

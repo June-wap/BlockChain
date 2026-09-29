@@ -43,7 +43,7 @@ describe("Admin Console & RBAC Operations (FE-20 to FE-28)", () => {
 
   it("should retrieve blockchain telemetry and handle contracts", () => {
     const telemetry = BlockchainService.getTelemetry();
-    expect(telemetry.network).toContain("Sepolia");
+    expect(telemetry.network).toMatch(/Sepolia|Hardhat/);
     expect(telemetry.contractAddress).toMatch(/^0x[a-fA-F0-9]{40}$/);
     expect(telemetry.stats.totalTransactions).toBeGreaterThan(0);
   });

@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import { ClaimService } from "@/server/services/claim.service";
+import { EvidenceService } from "@/server/services/evidence.service";
+import { ClaimRepository } from "@/server/repositories/claim.repository";
 import { initDatabase } from "@/server/db/postgres";
 import { ClaimStatus, UserRole } from "@/types";
 
@@ -121,5 +123,105 @@ describe("Claims Wizard Submission & Validation (FE-09, FE-10)", () => {
 
     // Should return existing claim without creating duplicate
     expect(secondCall.claim.id).toBe(firstCall.claim.id);
+  });
+
+  it("should support two-phase wizard flow: submit metadata first then upload real evidence via EvidenceService", async () => {
+    // Phase 1: Submit metadata first and receive real claimId
+    const res = await ClaimService.submitClaim(customerId, customerName, {
+      policyId: "pol-101",
+      incidentDate: "2026-06-02",
+      incidentType: "Emergency Medical Care",
+      location: "Ho Chi Minh General Hospital",
+      requestedAmount: 600,
+      description: "Emergency laceration stitching and antibiotic treatment.",
+    });
+
+    const realClaimId = res.claim.id;
+    expect(realClaimId).toBeDefined();
+    expect(res.claim.status).toBe(ClaimStatus.SUBMITTED);
+    expect(res.claim.evidence).toHaveLength(0);
+
+    // Phase 2: Upload real PDF evidence for the created claim
+    const pdfBuffer = Buffer.concat([
+      Buffer.from("%PDF-1.4\n"),
+      Buffer.from("Official emergency medical record and discharge invoice.\n%%EOF"),
+    ]);
+
+    const evidence = await EvidenceService.processUpload(
+      pdfBuffer,
+      "discharge_summary.pdf",
+      "application/pdf",
+      {
+        id: customerId,
+        name: customerName,
+        role: UserRole.CUSTOMER,
+      },
+      realClaimId
+    );
+
+    expect(evidence.id).toBeDefined();
+    expect(evidence.claimId).toBe(realClaimId);
+    expect(evidence.fileHash).toBeDefined();
+    expect(evidence.fileUrl).toBe(`/api/claims/${realClaimId}/evidence/${evidence.id}`);
+
+    // Verify ClaimRepository loads the document from DB
+    const fetchedClaim = await ClaimRepository.findById(realClaimId);
+    expect(fetchedClaim).not.toBeNull();
+    expect(fetchedClaim!.evidence).toHaveLength(1);
+    expect(fetchedClaim!.evidence![0].id).toBe(evidence.id);
+    expect(fetchedClaim!.evidence![0].fileUrl).toBe(`/api/claims/${realClaimId}/evidence/${evidence.id}`);
+  });
+
+  it("should handle partial upload error: claim remains created and allows retrying failed evidence", async () => {
+    // 1. Submit claim metadata
+    const res = await ClaimService.submitClaim(customerId, customerName, {
+      policyId: "pol-101",
+      incidentDate: "2026-06-03",
+      incidentType: "Emergency Medical Care",
+      location: "District Medical Center",
+      requestedAmount: 450,
+      description: "Medical prescription and pharmacy invoice after consultation.",
+    });
+
+    const claimId = res.claim.id;
+    expect(claimId).toBeDefined();
+
+    // 2. First file fails due to spoofed magic bytes
+    const spoofedBuffer = Buffer.from("<fake>not a valid pdf content</fake>");
+    await expect(
+      EvidenceService.processUpload(
+        spoofedBuffer,
+        "corrupt.pdf",
+        "application/pdf",
+        { id: customerId, name: customerName, role: UserRole.CUSTOMER },
+        claimId
+      )
+    ).rejects.toThrow(/Spoofed or corrupt binary detected/);
+
+    // Verify claim still exists in DB
+    const claimAfterFailure = await ClaimRepository.findById(claimId);
+    expect(claimAfterFailure).not.toBeNull();
+    expect(claimAfterFailure!.evidence).toHaveLength(0);
+
+    // 3. Retry upload with valid PDF binary succeeds
+    const validPdf = Buffer.concat([
+      Buffer.from("%PDF-1.5\n"),
+      Buffer.from("Valid pharmacy invoice after retrying failed upload.\n%%EOF"),
+    ]);
+
+    const retriedEvidence = await EvidenceService.processUpload(
+      validPdf,
+      "pharmacy_invoice.pdf",
+      "application/pdf",
+      { id: customerId, name: customerName, role: UserRole.CUSTOMER },
+      claimId
+    );
+
+    expect(retriedEvidence.id).toBeDefined();
+
+    // 4. Verify claim detail now reflects the retried uploaded evidence
+    const claimAfterRetry = await ClaimRepository.findById(claimId);
+    expect(claimAfterRetry!.evidence).toHaveLength(1);
+    expect(claimAfterRetry!.evidence![0].fileName).toContain("pharmacy_invoice.pdf");
   });
 });

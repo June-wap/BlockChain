@@ -51,9 +51,9 @@ function LoginForm() {
 
       // Backend role determines routing
       if (redirectUrl) {
-        router.push(redirectUrl);
+        router.replace(redirectUrl);
       } else {
-        router.push(getDefaultDashboardForRole(role));
+        router.replace(getDefaultDashboardForRole(role));
       }
     } catch (err: any) {
       setErrorMessage(err.message || "Unable to sign in. Please verify your credentials.");

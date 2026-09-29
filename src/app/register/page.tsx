@@ -47,7 +47,7 @@ export default function RegisterPage() {
       }
 
       await login(json.data.user, json.data.token);
-      router.push("/customer/dashboard");
+      router.replace("/customer/dashboard");
     } catch (err: any) {
       setErrorMessage(err.message || "Failed to create account. Please try again.");
     } finally {

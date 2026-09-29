@@ -279,15 +279,25 @@ export default function CustomerClaimDetailPage() {
                       </p>
                     )}
                   </div>
-                  <a
-                    href={ev.fileUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="shrink-0 text-brand-600 dark:text-brand-400 hover:underline flex items-center gap-1 font-medium"
-                  >
-                    <span>View</span>
-                    <ExternalLink className="w-3 h-3" />
-                  </a>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <a
+                      href={ev.fileUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-brand-600 dark:text-brand-400 hover:underline flex items-center gap-1 font-medium"
+                    >
+                      <span>View</span>
+                      <ExternalLink className="w-3 h-3" />
+                    </a>
+                    <span className="text-slate-300 dark:text-slate-600">|</span>
+                    <a
+                      href={`${ev.fileUrl}?download=true`}
+                      download={ev.fileName}
+                      className="text-brand-600 dark:text-brand-400 hover:underline font-medium"
+                    >
+                      Download
+                    </a>
+                  </div>
                 </div>
               ))}
             </div>

@@ -8,14 +8,18 @@ export async function fetchProfile(): Promise<User> {
   });
 
   if (!res.ok) {
-    throw new Error("Failed to load profile");
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Failed to load profile");
   }
 
   const json = await res.json();
   return json.data;
 }
 
-export async function updateProfileApi(data: { fullName?: string; phoneNumber?: string; walletAddress?: string }): Promise<User> {
+export async function updateProfileApi(data: {
+  fullName?: string;
+  phoneNumber?: string;
+}): Promise<User> {
   const res = await fetch("/api/customer/profile", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },

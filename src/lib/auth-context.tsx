@@ -3,7 +3,7 @@
 import React, { createContext, useContext, useEffect, useState } from "react";
 import { User, UserRole } from "@/types";
 import { getDefaultDashboardForRole } from "@/lib/permissions";
-import { useRouter, usePathname } from "next/navigation";
+import { useRouter } from "next/navigation";
 
 export interface DemoUserOption {
   email: string;
@@ -50,85 +50,97 @@ interface AuthContextType {
   token: string | null;
   isAuthenticated: boolean;
   isLoading: boolean;
-  login: (email: string, role?: UserRole) => Promise<void>;
-  logout: () => void;
-  switchRole: (role: UserRole) => void;
+  login: (userOrEmail: User | string, tokenOrRole?: string | UserRole) => Promise<void>;
+  logout: () => Promise<void>;
+  switchRole: (role: UserRole) => Promise<void>;
+  refreshUser: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
-
-const STORAGE_KEY_USER = "insurance_auth_user";
-const STORAGE_KEY_TOKEN = "insurance_auth_token";
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const router = useRouter();
-  const pathname = usePathname();
 
-  // Initialize from localStorage and cookies on mount
-  useEffect(() => {
+  // Bootstrap session from HTTP-only cookie via /api/auth/me
+  const refreshUser = React.useCallback(async () => {
     try {
-      const storedUser = localStorage.getItem(STORAGE_KEY_USER);
-      const storedToken = localStorage.getItem(STORAGE_KEY_TOKEN);
+      const res = await fetch("/api/auth/me", {
+        method: "GET",
+        credentials: "include",
+        cache: "no-store",
+      });
 
-      if (storedUser && storedToken) {
-        const parsedUser = JSON.parse(storedUser);
-        setUser(parsedUser);
-        setToken(storedToken);
-        setCookie("auth_role", parsedUser.role, 7);
-        setCookie("auth_token", storedToken, 7);
+      if (res.ok) {
+        const json = await res.json();
+        if (json.success && json.data?.user) {
+          setUser(json.data.user);
+          return;
+        }
       }
+      setUser(null);
     } catch (e) {
-      console.error("Failed to restore auth session:", e);
+      console.error("Failed to restore session via /api/auth/me:", e);
+      setUser(null);
     } finally {
       setIsLoading(false);
     }
   }, []);
 
+  useEffect(() => {
+    refreshUser();
+  }, [refreshUser]);
+
   const login = async (userOrEmail: User | string, tokenOrRole?: string | UserRole) => {
     setIsLoading(true);
     try {
-      if (typeof userOrEmail === "object" && userOrEmail !== null && typeof tokenOrRole === "string") {
+      if (typeof userOrEmail === "object" && userOrEmail !== null) {
         setUser(userOrEmail);
-        setToken(tokenOrRole);
-        localStorage.setItem(STORAGE_KEY_USER, JSON.stringify(userOrEmail));
-        localStorage.setItem(STORAGE_KEY_TOKEN, tokenOrRole);
+        if (typeof tokenOrRole === "string") {
+          setToken(tokenOrRole);
+        }
         return;
       }
 
-      const email = typeof userOrEmail === "string" ? userOrEmail : userOrEmail?.email;
+      const email = userOrEmail;
       const res = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({ email, password: "password123" }),
       });
       const json = await res.json();
-      if (json.success && json.data) {
+      if (json.success && json.data?.user) {
         setUser(json.data.user);
-        setToken(json.data.token);
-        localStorage.setItem(STORAGE_KEY_USER, JSON.stringify(json.data.user));
-        localStorage.setItem(STORAGE_KEY_TOKEN, json.data.token);
+        setToken(json.data.token || null);
+      } else {
+        throw new Error(json.error || "Authentication failed");
       }
     } catch (e) {
-      console.error("Auth login sync error:", e);
+      console.error("Auth login error:", e);
+      throw e;
     } finally {
       setIsLoading(false);
     }
   };
 
   const logout = async () => {
+    setIsLoading(true);
     try {
-      await fetch("/api/auth/logout", { method: "POST" });
-    } catch {}
-    setUser(null);
-    setToken(null);
-    localStorage.removeItem(STORAGE_KEY_USER);
-    localStorage.removeItem(STORAGE_KEY_TOKEN);
-    deleteCookie("auth_role");
-    deleteCookie("auth_token");
-    router.push("/login");
+      await fetch("/api/auth/logout", {
+        method: "POST",
+        credentials: "include",
+      });
+    } catch (e) {
+      console.error("Logout request error:", e);
+    } finally {
+      setUser(null);
+      setToken(null);
+      setIsLoading(false);
+      router.push("/login");
+    }
   };
 
   const switchRole = async (newRole: UserRole) => {
@@ -151,6 +163,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         login,
         logout,
         switchRole,
+        refreshUser,
       }}
     >
       {children}
@@ -164,16 +177,4 @@ export function useAuth() {
     throw new Error("useAuth must be used within an AuthProvider");
   }
   return context;
-}
-
-// Cookie helpers for Next.js Middleware synchronization
-function setCookie(name: string, value: string, days: number) {
-  if (typeof document === "undefined") return;
-  const expires = new Date(Date.now() + days * 864e5).toUTCString();
-  document.cookie = `${name}=${encodeURIComponent(value)}; expires=${expires}; path=/; SameSite=Lax`;
-}
-
-function deleteCookie(name: string) {
-  if (typeof document === "undefined") return;
-  document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/; SameSite=Lax`;
 }

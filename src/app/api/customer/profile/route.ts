@@ -1,16 +1,37 @@
 import { NextRequest, NextResponse } from "next/server";
 import { UserRepository } from "@/server/repositories/user.repository";
 import { getAuthenticatedUser } from "@/server/core/auth-extractor";
+import { UserRole } from "@/types";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(request: NextRequest) {
   try {
-    const { searchParams } = new URL(request.url);
     const authUser = await getAuthenticatedUser(request);
-    const customerId = searchParams.get("customerId") || authUser?.id || "usr_customer_default";
+    if (!authUser) {
+      return NextResponse.json(
+        { success: false, error: "Unauthorized: Active authentication session required." },
+        { status: 401 }
+      );
+    }
 
-    const user = await UserRepository.findById(customerId);
+    const { searchParams } = new URL(request.url);
+    const queryCustomerId = searchParams.get("customerId");
+
+    // Only ADMIN may query another user's profile
+    let targetId = authUser.id;
+    if (queryCustomerId && queryCustomerId !== authUser.id) {
+      if (authUser.role === UserRole.ADMIN) {
+        targetId = queryCustomerId;
+      } else {
+        return NextResponse.json(
+          { success: false, error: "Forbidden: You may only view your own profile." },
+          { status: 403 }
+        );
+      }
+    }
+
+    const user = await UserRepository.findById(targetId);
     if (!user) {
       return NextResponse.json({ success: false, error: "User not found" }, { status: 404 });
     }
@@ -28,40 +49,62 @@ export async function GET(request: NextRequest) {
         createdAt: user.createdAt,
       },
     });
-  } catch {
+  } catch (err: any) {
+    console.error("GET /api/customer/profile error:", err);
     return NextResponse.json({ success: false, error: "Failed to fetch profile" }, { status: 500 });
   }
 }
 
 export async function PUT(request: NextRequest) {
   try {
-    const body = await request.json();
-    const { customerId, fullName, phoneNumber, walletAddress } = body;
-
     const authUser = await getAuthenticatedUser(request);
-    const targetId = customerId || authUser?.id || "usr_customer_default";
+    if (!authUser) {
+      return NextResponse.json(
+        { success: false, error: "Unauthorized: Active authentication session required." },
+        { status: 401 }
+      );
+    }
+
+    const body = await request.json().catch(() => ({}));
+    const { customerId, fullName, phoneNumber, walletAddress, role } = body;
+
+    // A customer can only update their own profile; reject attempts to target another user
+    if (customerId && customerId !== authUser.id && authUser.role !== UserRole.ADMIN) {
+      return NextResponse.json(
+        { success: false, error: "Forbidden: You cannot modify another user's profile." },
+        { status: 403 }
+      );
+    }
+
+    // Role cannot be edited by customer
+    if (role && role !== authUser.role) {
+      return NextResponse.json(
+        { success: false, error: "Forbidden: Cannot alter user role." },
+        { status: 403 }
+      );
+    }
+
+    // Cryptographic security enforcement: walletAddress cannot be manually typed or injected
+    if (walletAddress !== undefined && walletAddress !== null) {
+      return NextResponse.json(
+        {
+          success: false,
+          error:
+            "Manual wallet assignment prohibited. Connect MetaMask and verify cryptographic ownership via signature.",
+        },
+        { status: 400 }
+      );
+    }
+
+    const targetId = authUser.role === UserRole.ADMIN && customerId ? customerId : authUser.id;
     const user = await UserRepository.findById(targetId);
     if (!user) {
       return NextResponse.json({ success: false, error: "User not found" }, { status: 404 });
     }
 
-    // Role cannot be edited by customer
-    if (body.role && body.role !== user.role) {
-      return NextResponse.json({ success: false, error: "Forbidden: Cannot alter user role." }, { status: 403 });
-    }
-
-    // Validate EVM wallet format if provided
-    if (walletAddress && !/^0x[a-fA-F0-9]{40}$/.test(walletAddress)) {
-      return NextResponse.json(
-        { success: false, error: "Invalid Ethereum wallet address format (must be 0x followed by 40 hex characters)." },
-        { status: 400 }
-      );
-    }
-
     await UserRepository.updateProfile(user.id, {
       fullName: fullName && fullName.trim().length >= 2 ? fullName.trim() : undefined,
       phoneNumber: phoneNumber !== undefined ? phoneNumber.trim() : undefined,
-      walletAddress: walletAddress !== undefined ? walletAddress.trim() : undefined,
     });
 
     const updatedUser = await UserRepository.findById(user.id);
@@ -80,7 +123,8 @@ export async function PUT(request: NextRequest) {
       },
       message: "Profile updated successfully.",
     });
-  } catch {
+  } catch (err: any) {
+    console.error("PUT /api/customer/profile error:", err);
     return NextResponse.json({ success: false, error: "Failed to update profile" }, { status: 500 });
   }
 }

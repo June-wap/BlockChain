@@ -3,9 +3,9 @@
 import React, { useState, useEffect, Suspense } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { PolicyDetail, PolicyStatus } from "@/types";
+import { Claim, EvidenceItem, PolicyDetail, PolicyStatus } from "@/types";
 import { fetchCustomerPolicies } from "@/lib/api/policies";
-import { createClaim } from "@/lib/api/claims";
+import { createClaim, uploadEvidence } from "@/lib/api/claims";
 import { formatCurrency, formatDate } from "@/lib/formatters";
 import {
   Shield,
@@ -24,13 +24,6 @@ import {
   FileCheck,
 } from "lucide-react";
 import { Button } from "@/components/ui/Button";
-
-interface UploadedFileItem {
-  name: string;
-  size: number;
-  type: string;
-  dataUrl: string;
-}
 
 function ClaimWizardInner() {
   const router = useRouter();
@@ -55,14 +48,29 @@ function ClaimWizardInner() {
   const [requestedAmount, setRequestedAmount] = useState<string>("");
   const [description, setDescription] = useState<string>("");
 
-  // Step 3: Evidence Files
-  const [evidenceFiles, setEvidenceFiles] = useState<UploadedFileItem[]>([]);
+  // Step 3: Evidence Files - keep the actual browser File objects (ISSUE-05)
+  const [evidenceFiles, setEvidenceFiles] = useState<File[]>([]);
   const [fileError, setFileError] = useState<string | null>(null);
 
-  // Step 4 & 5: Submission state
+  // Step 4 & 5: Submission & Upload state
   const [idempotencyKey, setIdempotencyKey] = useState<string>(() => `idemp_${Date.now()}_${Math.random()}`);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+
+  // Created Claim & Uploaded Evidence tracking for atomic multipart flow and partial upload retry (ISSUE-05)
+  const [createdClaim, setCreatedClaim] = useState<Claim | null>(null);
+  const [uploadedEvidence, setUploadedEvidence] = useState<EvidenceItem[]>([]);
+  const [partialUploadError, setPartialUploadError] = useState<{
+    claimId: string;
+    claimNumber?: string;
+    failedFiles: File[];
+    error: string;
+  } | null>(null);
+  const [uploadProgress, setUploadProgress] = useState<{
+    total: number;
+    current: number;
+    fileName: string;
+  } | null>(null);
 
   // Success State (FE-10)
   const [submittedClaim, setSubmittedClaim] = useState<any | null>(null);
@@ -135,7 +143,12 @@ function ClaimWizardInner() {
     const allowedTypes = ["application/pdf", "image/jpeg", "image/png", "image/webp"];
     const maxSizeBytes = 10 * 1024 * 1024; // 10 MB
 
-    const newFiles: UploadedFileItem[] = [];
+    if (evidenceFiles.length + files.length > 5) {
+      setFileError("Maximum 5 evidence documents are permitted per claim.");
+      return;
+    }
+
+    const newFiles: File[] = [];
 
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
@@ -150,15 +163,11 @@ function ClaimWizardInner() {
         return;
       }
 
-      newFiles.push({
-        name: file.name,
-        size: file.size,
-        type: file.type,
-        dataUrl: `/api/evidence/${encodeURIComponent(file.name)}`,
-      });
+      newFiles.push(file);
     }
 
     setEvidenceFiles((prev) => [...prev, ...newFiles]);
+    e.target.value = "";
   };
 
   const handleRemoveFile = (index: number) => {
@@ -169,31 +178,85 @@ function ClaimWizardInner() {
     if (isSubmitting) return; // Anti double-click
     setIsSubmitting(true);
     setSubmitError(null);
+    setPartialUploadError(null);
+
+    let activeClaim = createdClaim;
 
     try {
-      const payload = {
-        policyId: selectedPolicyId,
-        incidentDate,
-        incidentType,
-        location: location.trim(),
-        requestedAmount: Number(requestedAmount),
-        description: description.trim(),
-        evidenceFiles: evidenceFiles.map((f) => ({
-          fileName: f.name,
-          fileUrl: f.dataUrl,
-          fileSize: f.size,
-          mimeType: f.type,
-        })),
-        idempotencyKey,
-      };
+      // 1. Submit claim metadata first if not already created (ISSUE-05)
+      if (!activeClaim) {
+        const payload = {
+          policyId: selectedPolicyId,
+          incidentDate,
+          incidentType,
+          location: location.trim(),
+          requestedAmount: Number(requestedAmount),
+          description: description.trim(),
+          idempotencyKey,
+        };
 
-      const result = await createClaim(payload);
-      setSubmittedClaim(result);
+        activeClaim = await createClaim(payload);
+        setCreatedClaim(activeClaim);
+      }
+
+      const claimId = activeClaim.id;
+
+      // 2. Upload each selected evidence File via multipart/form-data POST /api/claims/evidence/upload (ISSUE-05)
+      const remainingFiles = evidenceFiles.filter(
+        (f) => !uploadedEvidence.some((ue) => ue.fileName === f.name && ue.fileSize === f.size)
+      );
+
+      const newlyUploaded: EvidenceItem[] = [];
+      const failed: File[] = [];
+      let uploadErrorMessage = "";
+
+      for (let i = 0; i < remainingFiles.length; i++) {
+        const file = remainingFiles[i];
+        setUploadProgress({
+          total: remainingFiles.length,
+          current: i + 1,
+          fileName: file.name,
+        });
+
+        try {
+          const evItem = await uploadEvidence(file, claimId);
+          newlyUploaded.push(evItem);
+        } catch (uploadErr: any) {
+          console.error(`Failed to upload ${file.name}:`, uploadErr);
+          uploadErrorMessage = uploadErr.message || `Failed to upload evidence "${file.name}"`;
+          for (let j = i; j < remainingFiles.length; j++) {
+            failed.push(remainingFiles[j]);
+          }
+          break;
+        }
+      }
+
+      const allUploaded = [...uploadedEvidence, ...newlyUploaded];
+      setUploadedEvidence(allUploaded);
+
+      // 3. If any evidence upload failed, display explicit partial upload error and allow retry (ISSUE-05)
+      if (failed.length > 0) {
+        setPartialUploadError({
+          claimId,
+          claimNumber: activeClaim.claimNumber,
+          failedFiles: failed,
+          error: uploadErrorMessage,
+        });
+        return;
+      }
+
+      // 4. All files uploaded successfully - authoritative response used
+      const finalClaim = {
+        ...activeClaim,
+        evidence: allUploaded,
+      };
+      setSubmittedClaim(finalClaim);
       setCurrentStep(5);
     } catch (err: any) {
       setSubmitError(err.message || "Failed to submit claim. Your entered data has been preserved.");
     } finally {
       setIsSubmitting(false);
+      setUploadProgress(null);
     }
   };
 
@@ -269,6 +332,10 @@ function ClaimWizardInner() {
           <button
             onClick={() => {
               setSubmittedClaim(null);
+              setCreatedClaim(null);
+              setUploadedEvidence([]);
+              setPartialUploadError(null);
+              setUploadProgress(null);
               setCurrentStep(1);
               setRequestedAmount("");
               setDescription("");
@@ -367,6 +434,52 @@ function ClaimWizardInner() {
             <p className="font-bold">Submission Failed</p>
             <p className="mt-0.5">{submitError}</p>
           </div>
+        </div>
+      )}
+
+      {/* Partial Upload Error Banner (ISSUE-05) */}
+      {partialUploadError && (
+        <div className="p-4 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 space-y-3">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="w-5 h-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+            <div className="text-xs text-amber-800 dark:text-amber-200">
+              <p className="font-bold text-sm">Partial Evidence Upload Error</p>
+              <p className="mt-1">
+                Claim <span className="font-mono font-semibold">{partialUploadError.claimNumber || partialUploadError.claimId}</span> has been officially created, but {partialUploadError.failedFiles.length} evidence file(s) failed to upload:
+              </p>
+              <p className="font-semibold text-red-600 dark:text-red-400 mt-1">{partialUploadError.error}</p>
+              <p className="mt-1 text-slate-600 dark:text-slate-400">
+                Pending / failed files: {partialUploadError.failedFiles.map((f) => f.name).join(", ")}.
+              </p>
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-2 pt-1 pl-8">
+            <Button
+              variant="primary"
+              size="sm"
+              disabled={isSubmitting}
+              onClick={handleSubmit}
+            >
+              {isSubmitting ? "Retrying Upload..." : "Retry Failed Uploads"}
+            </Button>
+            <Link href={`/customer/claims/${partialUploadError.claimId}`}>
+              <Button variant="secondary" size="sm">
+                <Eye className="w-3.5 h-3.5 mr-1" />
+                View Claim Details
+              </Button>
+            </Link>
+          </div>
+        </div>
+      )}
+
+      {/* Upload Progress Banner */}
+      {uploadProgress && (
+        <div className="p-3.5 rounded-xl bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-900 text-xs text-blue-700 dark:text-blue-300 flex items-center gap-3">
+          <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin shrink-0" />
+          <span>
+            Uploading evidence file {uploadProgress.current} of {uploadProgress.total}:{" "}
+            <strong className="font-semibold">{uploadProgress.fileName}</strong>...
+          </span>
         </div>
       )}
 
@@ -704,11 +817,23 @@ function ClaimWizardInner() {
                 {description}
               </p>
             </div>
-            <div className="pt-3 flex justify-between">
-              <span className="text-slate-500">Attached Evidence</span>
-              <span className="font-medium text-slate-900 dark:text-white">
-                {evidenceFiles.length} file(s) attached
-              </span>
+            <div className="pt-3">
+              <div className="flex justify-between items-center mb-1">
+                <span className="text-slate-500">Attached Evidence</span>
+                <span className="font-medium text-slate-900 dark:text-white">
+                  {evidenceFiles.length} file(s) attached
+                </span>
+              </div>
+              {evidenceFiles.length > 0 && (
+                <ul className="mt-2 space-y-1 pl-1">
+                  {evidenceFiles.map((f, i) => (
+                    <li key={i} className="text-[11px] text-slate-600 dark:text-slate-400 flex items-center justify-between">
+                      <span className="truncate max-w-[280px]">{f.name}</span>
+                      <span className="text-[10px] text-slate-400 shrink-0">{(f.size / 1024).toFixed(1)} KB</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
             </div>
           </div>
 
@@ -732,11 +857,17 @@ function ClaimWizardInner() {
               className="shadow-md"
             >
               {isSubmitting ? (
-                <span>Submitting Claim to Reviewers...</span>
+                <span>
+                  {uploadProgress
+                    ? `Uploading Evidence (${uploadProgress.current}/${uploadProgress.total})...`
+                    : "Submitting Claim..."}
+                </span>
               ) : (
                 <>
                   <CheckCircle2 className="w-4 h-4 mr-2" />
-                  <span>Submit Claim for Review</span>
+                  <span>
+                    {partialUploadError ? "Retry Failed Uploads" : "Submit Claim for Review"}
+                  </span>
                 </>
               )}
             </Button>

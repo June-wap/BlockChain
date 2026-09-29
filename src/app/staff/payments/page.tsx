@@ -363,6 +363,20 @@ export default function StaffPaymentsPage() {
                   {formatCurrency(activePayment.amount)}
                 </span>
               </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Demo settlement conversion</span>
+                <span className="font-mono font-medium text-slate-700 dark:text-slate-300">
+                  {(activePayment.amount / (Number(process.env.NEXT_PUBLIC_DEMO_USD_PER_ETH) || 1000)).toFixed(4)} ETH
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Blockchain Network</span>
+                <span className="font-medium text-slate-700 dark:text-slate-300">
+                  {process.env.NEXT_PUBLIC_BLOCKCHAIN_CHAIN_ID === "31337" || !process.env.NEXT_PUBLIC_BLOCKCHAIN_CHAIN_ID
+                    ? "Hardhat Local (Chain 31337)"
+                    : "Ethereum Sepolia (Chain 11155111)"}
+                </span>
+              </div>
             </div>
 
             <div className="p-3 rounded-xl bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-900 text-blue-800 dark:text-blue-300">

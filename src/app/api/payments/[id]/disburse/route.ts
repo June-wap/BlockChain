@@ -8,7 +8,9 @@ import { ClaimRepository } from "@/server/repositories/claim.repository";
 import { OutboxRepository } from "@/server/repositories/outbox.repository";
 import { AuditRepository } from "@/server/repositories/audit.repository";
 import { NotificationRepository } from "@/server/repositories/notification.repository";
+import { UserRepository } from "@/server/repositories/user.repository";
 import { dbConnection } from "@/server/db/postgres";
+import { ethers } from "ethers";
 
 export const dynamic = "force-dynamic";
 
@@ -46,6 +48,34 @@ export async function POST(
       );
     }
 
+    // Resolve recipient wallet for crypto payout
+    let recipientWallet = payment.recipientWallet;
+    if (!recipientWallet) {
+      const customer = await UserRepository.findById(payment.customerId);
+      if (customer?.walletAddress) {
+        recipientWallet = customer.walletAddress;
+        payment.recipientWallet = recipientWallet;
+      }
+    }
+
+    const isCryptoPayment =
+      payment.paymentMethod !== "FIAT_BANK_TRANSFER";
+
+    if (isCryptoPayment) {
+      if (!recipientWallet || !ethers.isAddress(recipientWallet.toLowerCase())) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: "CUSTOMER_WALLET_NOT_VERIFIED: A verified EVM customer wallet is required for smart contract disbursement.",
+            code: "CUSTOMER_WALLET_NOT_VERIFIED",
+          },
+          { status: 400 }
+        );
+      }
+      recipientWallet = ethers.getAddress(recipientWallet.toLowerCase());
+      payment.recipientWallet = recipientWallet;
+    }
+
     let outboxId: string;
 
     // 1. Atomic database state transition: PENDING -> PROCESSING
@@ -73,7 +103,7 @@ export async function POST(
             paymentId: payment.id,
             claimId: payment.claimId,
             amount: payment.amount,
-            recipientWallet: payment.recipientWallet || "0x71C8366453AB548A31D08f237B855D282126B39a",
+            recipientWallet: recipientWallet || null,
           },
         },
         client
@@ -100,7 +130,7 @@ export async function POST(
       payment.id,
       payment.claimId,
       payment.amount,
-      payment.recipientWallet || "0x71C8366453AB548A31D08f237B855D282126B39a"
+      recipientWallet!
     );
 
     // 3. Atomic finalize: mark payment SUCCESS and claim PAID

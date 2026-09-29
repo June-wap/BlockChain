@@ -6,6 +6,8 @@ import { RbacGuard } from "@/server/core/rbac";
 import { PaymentRepository } from "@/server/repositories/payment.repository";
 import { BlockchainTransactionRepository } from "@/server/repositories/blockchain-tx.repository";
 import { AuditRepository } from "@/server/repositories/audit.repository";
+import { UserRepository } from "@/server/repositories/user.repository";
+import { ethers } from "ethers";
 
 export const dynamic = "force-dynamic";
 
@@ -49,12 +51,38 @@ export async function POST(
       });
     }
 
+    // Resolve recipient wallet for crypto payout
+    let recipientWallet = payment.recipientWallet;
+    if (!recipientWallet) {
+      const customer = await UserRepository.findById(payment.customerId);
+      if (customer?.walletAddress) {
+        recipientWallet = customer.walletAddress;
+        payment.recipientWallet = recipientWallet;
+      }
+    }
+
+    const isCryptoPayment = payment.paymentMethod !== "FIAT_BANK_TRANSFER";
+    if (isCryptoPayment) {
+      if (!recipientWallet || !ethers.isAddress(recipientWallet.toLowerCase())) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: "CUSTOMER_WALLET_NOT_VERIFIED: A verified EVM customer wallet is required for smart contract disbursement.",
+            code: "CUSTOMER_WALLET_NOT_VERIFIED",
+          },
+          { status: 400 }
+        );
+      }
+      recipientWallet = ethers.getAddress(recipientWallet.toLowerCase());
+      payment.recipientWallet = recipientWallet;
+    }
+
     // Execute retry
     const bcResult = await BlockchainService.recordPaymentDisbursement(
       payment.id,
       payment.claimId,
       payment.amount,
-      payment.recipientWallet || "0x71C8366453AB548A31D08f237B855D282126B39a"
+      recipientWallet!
     );
 
     payment.status = PaymentStatus.SUCCESS;

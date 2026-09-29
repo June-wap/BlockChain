@@ -228,7 +228,11 @@ export const PortalShell: React.FC<PortalShellProps> = ({
               {/* Wallet info indicator */}
               <div className="hidden lg:flex items-center gap-1.5 px-2.5 py-1 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-600">
                 <Wallet className="w-3.5 h-3.5 text-brand-600" />
-                <span className="font-mono text-[11px]">0x71C...B39a</span>
+                <span className="font-mono text-[11px]" title={user?.walletAddress || "No wallet connected"}>
+                  {user?.walletAddress
+                    ? `${user.walletAddress.substring(0, 6)}...${user.walletAddress.substring(user.walletAddress.length - 4)}`
+                    : "No Wallet"}
+                </span>
               </div>
 
               {/* Portal Links Menu (Quick Portal Switch) */}

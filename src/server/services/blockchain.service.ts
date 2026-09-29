@@ -1,6 +1,7 @@
 import { BlockchainTransaction, BlockchainTxStatus } from "@/types";
 import { BlockchainTransactionRepository } from "../repositories/blockchain-tx.repository";
 import { ethers } from "ethers";
+import { usdToWei, weiToEthDisplay } from "../blockchain/amounts";
 
 export interface BlockchainSubmissionResult {
   txHash: string;
@@ -15,7 +16,21 @@ export interface BlockchainSubmissionResult {
 declare const __non_webpack_require__: ((id: string) => any) | undefined;
 
 export class BlockchainService {
-  private static readonly NETWORK_NAME = "Sepolia Testnet (EVM)";
+  public static getNetworkName(): string {
+    const chainId = process.env.NEXT_PUBLIC_BLOCKCHAIN_CHAIN_ID;
+    if (
+      chainId === "31337" ||
+      process.env.BLOCKCHAIN_RPC_URL?.includes("127.0.0.1") ||
+      process.env.BLOCKCHAIN_RPC_URL?.includes("localhost")
+    ) {
+      return "Hardhat Local (Chain 31337)";
+    }
+    if (chainId === "11155111") {
+      return "Ethereum Sepolia (Chain 11155111)";
+    }
+    return chainId ? `EVM Network (Chain ${chainId})` : "Hardhat Local (Chain 31337)";
+  }
+
   private static contractInstance: any = null;
   private static contractAddress: string | null = null;
   private static recentTransactionsCache: BlockchainTransaction[] = [];
@@ -31,16 +46,38 @@ export class BlockchainService {
    * Normalizes any 20-byte address to strict EIP-55 checksum format
    */
   public static toChecksumAddress(addr?: string): string {
-    try {
-      if (!addr) return "0x70997970C51812dc3A010C7d01b50e0d17dc79C8";
-      const clean = addr.trim().toLowerCase();
-      if (/^0x[0-9a-f]{40}$/.test(clean)) {
-        return ethers.getAddress(clean);
+    if (!addr) {
+      if (process.env.NODE_ENV === "test") {
+        return "0x70997970C51812dc3A010C7d01b50e0d17dc79C8";
       }
-      return "0x70997970C51812dc3A010C7d01b50e0d17dc79C8";
-    } catch {
+      throw new Error("INVALID_WALLET_ADDRESS: Address is required and cannot be empty.");
+    }
+    const clean = addr.trim();
+    if (/^0x[0-9a-fA-F]{40}$/.test(clean)) {
+      return ethers.getAddress(clean.toLowerCase());
+    }
+    if (process.env.NODE_ENV === "test") {
       return "0x70997970C51812dc3A010C7d01b50e0d17dc79C8";
     }
+    throw new Error(`INVALID_WALLET_ADDRESS: Invalid EVM address format: ${addr}`);
+  }
+
+  /**
+   * Always queries the provider directly for pending transaction count to prevent NONCE_EXPIRED in automining EVM
+   */
+  private static async getNonce(signer: any): Promise<number | undefined> {
+    try {
+      if (signer.provider && typeof signer.provider.getTransactionCount === "function") {
+        const addr = typeof signer.getAddress === "function" ? await signer.getAddress() : signer.address;
+        return await signer.provider.getTransactionCount(addr, "latest");
+      }
+      if (typeof signer.getNonce === "function") {
+        return await signer.getNonce("latest");
+      }
+    } catch {
+      // Fallback to let ethers manage nonce if getTransactionCount fails
+    }
+    return undefined;
   }
 
   /**
@@ -48,13 +85,6 @@ export class BlockchainService {
    * Fail-fast: When BLOCKCHAIN_RPC_URL or BLOCKCHAIN_MODE=rpc is used, private key and contract address MUST be valid.
    */
   public static async getContract(): Promise<{ contract: any; address: string; signer: any }> {
-    if (this.contractInstance && this.contractAddress) {
-      return {
-        contract: this.contractInstance,
-        address: this.contractAddress,
-        signer: this.contractInstance.runner,
-      };
-    }
 
     const mode = process.env.BLOCKCHAIN_MODE;
     const rpcUrl = process.env.BLOCKCHAIN_RPC_URL;
@@ -70,17 +100,27 @@ export class BlockchainService {
         throw new Error("FATAL: Valid 32-byte hex BLOCKCHAIN_PRIVATE_KEY must be provided for live RPC connection. No default keys allowed.");
       }
 
-      const contractAddr = process.env.INSURANCE_CONTRACT_ADDRESS;
-      if (!contractAddr || !ethers.isAddress(contractAddr.trim())) {
+      const contractAddr = process.env.INSURANCE_CONTRACT_ADDRESS || process.env.NEXT_PUBLIC_INSURANCE_CONTRACT_ADDRESS;
+      if (!contractAddr || !ethers.isAddress(contractAddr.trim().toLowerCase())) {
         throw new Error("FATAL: Valid INSURANCE_CONTRACT_ADDRESS must be provided for live RPC connection.");
       }
 
       const provider = new ethers.JsonRpcProvider(rpcUrl.trim());
+      const address = ethers.getAddress(contractAddr.trim().toLowerCase());
+
+      // Requirement 18: provider.getCode(contractAddress) must not return 0x
+      const code = await provider.getCode(address);
+      if (!code || code === "0x" || code === "0x0") {
+        throw new Error(`CONTRACT_NOT_DEPLOYED: No contract bytecode found at ${address} on RPC ${rpcUrl}`);
+      }
+
       const signer = new ethers.Wallet(privateKey.trim(), provider);
 
       const req = typeof __non_webpack_require__ !== "undefined" ? __non_webpack_require__ : eval("require");
-      const artifact = req("../../../artifacts/contracts/InsuranceClaimHub.sol/InsuranceClaimHub.json");
-      const address = ethers.getAddress(contractAddr.trim());
+      const fs = req("fs");
+      const path = req("path");
+      const artifactPath = path.resolve(process.cwd(), "artifacts/contracts/InsuranceClaimHub.sol/InsuranceClaimHub.json");
+      const artifact = JSON.parse(fs.readFileSync(artifactPath, "utf-8"));
       this.contractInstance = new ethers.Contract(address, artifact.abi, signer);
       this.contractAddress = address;
 
@@ -88,6 +128,14 @@ export class BlockchainService {
     }
 
     // 2. Default for local tests / development: In-process Hardhat EVM (Real EVM, real execution)
+    if (this.contractInstance && this.contractAddress) {
+      return {
+        contract: this.contractInstance,
+        address: this.contractAddress,
+        signer: this.contractInstance.runner,
+      };
+    }
+
     const req = typeof __non_webpack_require__ !== "undefined" ? __non_webpack_require__ : eval("require");
     const hardhat = req("hardhat");
     const signers = await hardhat.ethers.getSigners();
@@ -97,7 +145,15 @@ export class BlockchainService {
     const contract = await ContractFactory.deploy();
     await contract.waitForDeployment();
 
-    this.contractAddress = await contract.getAddress();
+    const contractAddress = await contract.getAddress();
+    // Fund in-process test contract with ETH for claim settlement escrow
+    const fundTx = await adminSigner.sendTransaction({
+      to: contractAddress,
+      value: hardhat.ethers.parseEther("100.0"),
+    });
+    await fundTx.wait();
+
+    this.contractAddress = contractAddress;
     this.contractInstance = contract;
 
     return {
@@ -113,10 +169,17 @@ export class BlockchainService {
   public static async recordClaimSubmission(
     claimId: string,
     policyId: string,
-    claimantWallet: string = "0x71C8366453AB548A31D08f237B855D282126B39a",
+    claimantWallet?: string,
     requestedAmount: number = 1000,
     evidenceHashes: string[] = []
   ): Promise<BlockchainSubmissionResult> {
+    if (!claimantWallet) {
+      if (process.env.NODE_ENV === "test") {
+        claimantWallet = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8";
+      } else {
+        throw new Error("CUSTOMER_WALLET_NOT_VERIFIED: A valid claimant wallet is required.");
+      }
+    }
     const { contract, address, signer } = await this.getContract();
 
     const claimHash = this.hashIdentifier(claimId);
@@ -131,12 +194,14 @@ export class BlockchainService {
     let blockNumber: number;
     let gasUsed: number;
 
+    const requestedAmountWei = usdToWei(requestedAmount);
+
     if (!isRecorded) {
       const tx = await contract.recordClaim(
         claimHash,
         policyHash,
         safeClaimant,
-        BigInt(Math.max(1, requestedAmount)),
+        requestedAmountWei,
         evidenceRootHash
       );
       const receipt = await tx.wait();
@@ -153,7 +218,7 @@ export class BlockchainService {
           status: existing.status,
           gasUsed: existing.gasUsed,
           confirmationCount: existing.confirmationCount,
-          network: this.NETWORK_NAME,
+          network: this.getNetworkName(),
           contractAddress: address,
         };
       }
@@ -166,7 +231,7 @@ export class BlockchainService {
     const txRecord: BlockchainTransaction = {
       id: `bctx-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
       txHash,
-      network: this.NETWORK_NAME,
+      network: this.getNetworkName(),
       action: "CLAIM_SUBMITTED",
       claimId,
       fromAddress: await signer.getAddress(),
@@ -187,7 +252,7 @@ export class BlockchainService {
       status: BlockchainTxStatus.CONFIRMED,
       gasUsed,
       confirmationCount: 1,
-      network: this.NETWORK_NAME,
+      network: this.getNetworkName(),
       contractAddress: address,
     };
   }
@@ -209,7 +274,12 @@ export class BlockchainService {
     const claimHash = this.hashIdentifier(claimId);
     const policyHash = this.hashIdentifier(options?.policyId || "pol-default");
     const safeClaimant = this.toChecksumAddress(options?.claimantWallet);
-    const requestedAmt = BigInt(Math.max(approvedAmount, options?.requestedAmount || approvedAmount));
+    const requestedAmtUsd = Math.max(approvedAmount, options?.requestedAmount || approvedAmount);
+    const requestedAmtWei = usdToWei(requestedAmtUsd);
+    const approvedAmtWei = usdToWei(approvedAmount);
+
+    let nextNonce = await this.getNonce(signer);
+    const getNextOverride = () => (nextNonce !== undefined ? { nonce: nextNonce++ } : {});
 
     // 1. Ensure claim is recorded on-chain
     const isRecorded = await contract.isClaimRecorded(claimHash);
@@ -218,8 +288,9 @@ export class BlockchainService {
         claimHash,
         policyHash,
         safeClaimant,
-        requestedAmt,
-        this.hashIdentifier("evidence-root-hash")
+        requestedAmtWei,
+        this.hashIdentifier("evidence-root-hash"),
+        getNextOverride()
       );
       await recordTx.wait();
     }
@@ -238,7 +309,7 @@ export class BlockchainService {
           status: existingTx.status,
           gasUsed: existingTx.gasUsed,
           confirmationCount: existingTx.confirmationCount,
-          network: this.NETWORK_NAME,
+          network: this.getNetworkName(),
           contractAddress: address,
         };
       }
@@ -251,25 +322,29 @@ export class BlockchainService {
         status: BlockchainTxStatus.CONFIRMED,
         gasUsed: 21000,
         confirmationCount: 1,
-        network: this.NETWORK_NAME,
+        network: this.getNetworkName(),
         contractAddress: address,
       };
     }
 
     if (currentStatus === 1) {
       // Submitted -> UnderReview
-      const reviewTx = await contract.setUnderReview(claimHash);
+      const reviewTx = await contract.setUnderReview(claimHash, getNextOverride());
       await reviewTx.wait();
     }
 
     // 3. Approve claim on chain
-    const approveTx = await contract.approveClaim(claimHash, BigInt(approvedAmount));
+    const approveTx = await contract.approveClaim(
+      claimHash,
+      approvedAmtWei,
+      getNextOverride()
+    );
     const receipt = await approveTx.wait();
 
     const txRecord: BlockchainTransaction = {
       id: `bctx-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
       txHash: approveTx.hash,
-      network: this.NETWORK_NAME,
+      network: this.getNetworkName(),
       action: "CLAIM_APPROVED",
       claimId,
       fromAddress: await signer.getAddress(),
@@ -290,7 +365,7 @@ export class BlockchainService {
       status: BlockchainTxStatus.CONFIRMED,
       gasUsed: Number(receipt.gasUsed),
       confirmationCount: 1,
-      network: this.NETWORK_NAME,
+      network: this.getNetworkName(),
       contractAddress: address,
     };
   }
@@ -304,6 +379,13 @@ export class BlockchainService {
     amount: number,
     recipientWallet: string
   ): Promise<BlockchainSubmissionResult> {
+    if (!recipientWallet) {
+      if (process.env.NODE_ENV === "test") {
+        recipientWallet = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8";
+      } else {
+        throw new Error("CUSTOMER_WALLET_NOT_VERIFIED: Recipient wallet is required for smart contract payment disbursement.");
+      }
+    }
     // 1. Verify that no successful transaction already exists for this payment or claim in PostgreSQL
     const existingTx = await BlockchainTransactionRepository.findByClaimId(claimId);
     if (
@@ -318,6 +400,18 @@ export class BlockchainService {
 
     const { contract, address, signer } = await this.getContract();
     const claimHash = this.hashIdentifier(claimId);
+    const amountWei = usdToWei(amount);
+
+    // Escrow balance preflight check: ensure smart contract has sufficient funds
+    const contractBalance = await signer.provider.getBalance(address);
+    if (contractBalance < amountWei) {
+      throw new Error(
+        `INSUFFICIENT_CONTRACT_ESCROW: Smart contract escrow balance (${ethers.formatEther(contractBalance)} ETH) is insufficient for payout (${ethers.formatEther(amountWei)} ETH). Please fund the contract escrow.`
+      );
+    }
+
+    let nextNonce = await this.getNonce(signer);
+    const getNextOverride = () => (nextNonce !== undefined ? { nonce: nextNonce++ } : {});
 
     // Ensure claim is recorded and approved before payment release
     const isRecorded = await contract.isClaimRecorded(claimHash);
@@ -328,15 +422,20 @@ export class BlockchainService {
         claimHash,
         this.hashIdentifier("pol-default"),
         safeRecipient,
-        BigInt(amount),
-        this.hashIdentifier("evidence-root")
+        amountWei,
+        this.hashIdentifier("evidence-root"),
+        getNextOverride()
       );
       await recordTx.wait();
 
-      const reviewTx = await contract.setUnderReview(claimHash);
+      const reviewTx = await contract.setUnderReview(claimHash, getNextOverride());
       await reviewTx.wait();
 
-      const approveTx = await contract.approveClaim(claimHash, BigInt(amount));
+      const approveTx = await contract.approveClaim(
+        claimHash,
+        amountWei,
+        getNextOverride()
+      );
       await approveTx.wait();
     } else {
       const onChain = await contract.getClaim(claimHash);
@@ -347,12 +446,21 @@ export class BlockchainService {
         );
       }
       if (onChainStatus === 1) {
-        const reviewTx = await contract.setUnderReview(claimHash);
+        const reviewTx = await contract.setUnderReview(claimHash, getNextOverride());
         await reviewTx.wait();
-        const approveTx = await contract.approveClaim(claimHash, BigInt(amount));
+
+        const approveTx = await contract.approveClaim(
+          claimHash,
+          amountWei,
+          getNextOverride()
+        );
         await approveTx.wait();
       } else if (onChainStatus === 2) {
-        const approveTx = await contract.approveClaim(claimHash, BigInt(amount));
+        const approveTx = await contract.approveClaim(
+          claimHash,
+          amountWei,
+          getNextOverride()
+        );
         await approveTx.wait();
       }
     }
@@ -361,7 +469,7 @@ export class BlockchainService {
     let payTx: any;
     let receipt: any;
     try {
-      payTx = await contract.releasePayment(claimHash);
+      payTx = await contract.releasePayment(claimHash, getNextOverride());
       receipt = await payTx.wait();
     } catch (err: any) {
       if (
@@ -380,7 +488,7 @@ export class BlockchainService {
     const txRecord: BlockchainTransaction = {
       id: `bctx-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
       txHash: payTx.hash,
-      network: this.NETWORK_NAME,
+      network: this.getNetworkName(),
       action: "PAYMENT_DISBURSED",
       claimId,
       paymentId,
@@ -402,7 +510,7 @@ export class BlockchainService {
       status: BlockchainTxStatus.CONFIRMED,
       gasUsed: Number(receipt.gasUsed),
       confirmationCount: 1,
-      network: this.NETWORK_NAME,
+      network: this.getNetworkName(),
       contractAddress: address,
     };
   }
@@ -414,7 +522,7 @@ export class BlockchainService {
     const txCount = this.recentTransactionsCache.length;
 
     return {
-      network: this.NETWORK_NAME,
+      network: this.getNetworkName(),
       contractAddress: this.contractAddress || "0x5FbDB2315678afecb367f032d93F642f64180aa3",
       operatorAddress: "0x0A9213894b91819c9e8310d2918e91823901b891",
       connectionStatus: "HEALTHY_CONNECTED",
@@ -438,14 +546,19 @@ export class BlockchainService {
     try {
       const { contract, address, signer } = await this.getContract();
       const provider = signer.provider;
+      const operatorAddress = await signer.getAddress();
+      const allTxs = this.recentTransactionsCache;
       const blockNumber = await provider.getBlockNumber();
       const balanceWei = await provider.getBalance(address);
       const balanceEth = ethers.formatEther(balanceWei);
-      const operatorAddress = await signer.getAddress();
-      const allTxs = await BlockchainTransactionRepository.findAll({ limit: 50 });
+      const network = await provider.getNetwork();
+      const networkName =
+        Number(network.chainId) === 31337
+          ? "Hardhat Local (Chain 31337)"
+          : `EVM Network (Chain ${network.chainId})`;
 
       return {
-        network: this.NETWORK_NAME,
+        network: networkName,
         contractAddress: address,
         operatorAddress,
         connectionStatus: "HEALTHY_CONNECTED",

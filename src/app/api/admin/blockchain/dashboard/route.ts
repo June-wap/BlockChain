@@ -24,7 +24,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({
         success: true,
         data: {
-          network: "Sepolia Testnet (EVM)",
+          network: BlockchainService.getNetworkName(),
           connectionStatus: "DEGRADED_FALLBACK",
           contractAddress: "0x3918a10982301982b81092830192839182390182",
           operatorAddress: "0x0A9213894b91819c9e8310d2918e91823901b891",

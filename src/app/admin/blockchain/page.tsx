@@ -90,7 +90,7 @@ export default function AdminBlockchainPage() {
           <div className="flex items-center gap-2">
             <div className="w-3 h-3 rounded-full bg-emerald-500 animate-pulse" />
             <span className="font-bold text-sm tracking-wide">
-              {telemetry?.network || "Sepolia Testnet (EVM)"}
+              {telemetry?.network || (process.env.NEXT_PUBLIC_BLOCKCHAIN_CHAIN_ID === "31337" || !process.env.NEXT_PUBLIC_BLOCKCHAIN_CHAIN_ID ? "Hardhat Local (Chain 31337)" : "Ethereum Sepolia (Chain 11155111)")}
             </span>
           </div>
           <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">

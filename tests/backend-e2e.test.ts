@@ -187,7 +187,7 @@ describe("Backend End-to-End Flow Tests (BE-37)", () => {
 
   it("Flow 3: Blockchain Telemetry handles degraded state without crashing", () => {
     const telemetry = BlockchainService.getTelemetry();
-    expect(telemetry.network).toBe("Sepolia Testnet (EVM)");
+    expect(telemetry.network).toMatch(/Sepolia Testnet \(EVM\)|Hardhat Local \(Chain 31337\)/);
     expect(telemetry.stats.totalTransactions).toBeGreaterThan(0);
     expect(telemetry.connectionStatus).toBe("HEALTHY_CONNECTED");
   });

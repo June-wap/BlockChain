@@ -1,4 +1,4 @@
-import { BlockchainTransaction, Claim, ClaimReview, PolicyDetail } from "@/types";
+import { BlockchainTransaction, Claim, ClaimReview, EvidenceItem, PolicyDetail } from "@/types";
 
 export interface CreateClaimPayload {
   policyId: string;
@@ -70,6 +70,25 @@ export async function createClaim(payload: CreateClaimPayload): Promise<Claim> {
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.error || "Failed to submit claim");
+  }
+
+  const json = await res.json();
+  return json.data;
+}
+
+export async function uploadEvidence(file: File, claimId: string): Promise<EvidenceItem> {
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("claimId", claimId);
+
+  const res = await fetch("/api/claims/evidence/upload", {
+    method: "POST",
+    body: formData,
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `Upload failed for ${file.name}`);
   }
 
   const json = await res.json();
